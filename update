@@ -1,0 +1,6 @@
+-- SmelterOS update command. Run `update` from the CC: Tweaked terminal.
+local url = "https://raw.githubusercontent.com/F000NKKK/SmelterOS/master/install.lua"
+print("SmelterOS: checking for the latest update...")
+if not shell.run("wget", "run", url) then
+  printError("SmelterOS update failed. Check internet/HTTP and try again.")
+end

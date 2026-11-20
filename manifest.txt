@@ -4,4 +4,5 @@ smelteros/core.lua
 smelteros/devices.lua
 smelteros/storage.lua
 smelteros/ui.lua
+smelteros/renderer.lua
 smelteros/config.default.lua

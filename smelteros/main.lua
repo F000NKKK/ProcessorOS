@@ -18,7 +18,7 @@ if devices.monitorPeripheral then
   pcall(function() devices.monitorPeripheral.setTextScale(config.monitor_scale or 0.5) end)
 end
 
-print("SmelterOS 0.1.1 online")
+print("SmelterOS 0.1.2 online")
 print("Monitor: " .. tostring(devices.monitor))
 print("Auto feed: " .. tostring(config.enabled))
 

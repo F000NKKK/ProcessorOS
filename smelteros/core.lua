@@ -34,7 +34,15 @@ function M.newState()
     phase = "idle", batch = 0, completed = 0,
     itemsMoved = 0, transferred = 0,
     baseline = nil, started = nil, error = nil, faultFrom = nil,
+    lastDuration = nil,
   }
+end
+
+local function recordDuration(state, config)
+  if not state.started or not state.baseline or not state.baseline.name then return end
+  local elapsed = now() - state.started
+  if elapsed <= 0 or elapsed > (config.timeout_seconds or 300) then return end
+  state.lastDuration = elapsed
 end
 
 local function save(state, persistence)
@@ -101,6 +109,9 @@ function M.step(state, config, devices, persistence)
 
   if state.phase == "idle" then
     if not config.enabled then return end
+    -- Wait for wired-network inventory names before starting a NEW batch.
+    -- Existing processing/unloading batches must still be recoverable.
+    if devices.networkReady == false then return end
     if slot then
       return fault(state, persistence, "Unknown item on depot. Clear it manually; no baseline to compare.")
     end
@@ -127,8 +138,12 @@ function M.step(state, config, devices, persistence)
     end
     if not slot then
       if not devices.inputPeripheral then return end
-      local amount = devices.inputPeripheral.pushItems(
+      local ok, amount = pcall(devices.inputPeripheral.pushItems,
         devices.depot, state.inSlot, math.max(1, math.min(64, config.batch_limit or 64)))
+      if not ok then
+        return fault(state, persistence,
+          "NO WIRED ROUTE: drawer -> depot. Activate both modems. " .. tostring(amount), "loading")
+      end
       if amount == 0 then
         return fault(state, persistence, "Input transfer returned 0; check both wired modems")
       end
@@ -154,6 +169,7 @@ function M.step(state, config, devices, persistence)
       return fault(state, persistence, "Missing input fingerprint")
     end
     if M.fingerprint(item) ~= state.baseline.fingerprint then
+      recordDuration(state, config)
       state.phase = "unloading"
       save(state, persistence) -- journal BEFORE unloading
       return
@@ -174,7 +190,12 @@ function M.step(state, config, devices, persistence)
     if devices.output == devices.depot then
       return fault(state, persistence, "Output cannot be the depot")
     end
-    local moved = devices.depotPeripheral.pushItems(devices.output, slot)
+    local ok, moved = pcall(devices.depotPeripheral.pushItems, devices.output, slot)
+    if not ok then
+      return fault(state, persistence,
+        "NO WIRED ROUTE: depot -> output. Activate the depot modem. " .. tostring(moved),
+        "unloading")
+    end
     if moved == 0 then
       return fault(state, persistence,
         "Output rejected item. Check AE2 provider or set a chest as output.", "unloading")

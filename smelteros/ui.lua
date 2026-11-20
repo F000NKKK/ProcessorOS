@@ -37,6 +37,7 @@ end
 local function status(state, config, devices)
   if state.phase == "fault" then return "FAULT", palette.bad end
   if state.phase == "processing" then return "BLASTING", palette.warning end
+  if state.phase == "unknown_wait" then return "UNKNOWN DEPOT ITEM", palette.warning end
   if state.phase == "gathering" then return "STACKING INPUT", palette.accent end
   if state.phase == "loading" then return "FEEDING", palette.accent end
   if state.phase == "unloading" then return "UNLOADING", palette.accent end
@@ -77,7 +78,7 @@ function M.draw(screen, state, config, devices, now)
   screen.clear()
   fill(screen, 1, palette.panel)
   put(screen, 2, 1, " SMELTER / OS ", palette.accent, palette.panel)
-  put(screen, math.max(1, w - 9), 1, " v0.1.5 ", palette.ink, palette.panel)
+  put(screen, math.max(1, w - 9), 1, " v0.1.6 ", palette.ink, palette.panel)
   local stateName, stateColor = status(state, config, devices)
   center(screen, 3, "SYSTEM  " .. stateName, stateColor)
   -- A 4-wide x 2-high advanced monitor is a wide, short display.
@@ -88,8 +89,11 @@ function M.draw(screen, state, config, devices, now)
   put(screen, half + 1, 5, "BATCHES   " .. tostring(state.completed or 0), palette.positive)
   put(screen, half + 1, 6, "LOADED    " .. tostring(state.itemsMoved or 0), palette.muted)
   put(screen, half + 1, 7, "ENABLED   " .. (config.enabled and "YES" or "NO"), palette.accent)
+  if (state.unknownRecovered or 0) > 0 then
+    put(screen, half + 1, 8, "UNKNOWN OUT " .. tostring(state.unknownRecovered), palette.warning)
+  end
 
-  local baseline = state.baseline or {}
+  local baseline = state.baseline or state.unknownBaseline or {}
   put(screen, 3, 9, "CURRENT ITEM", palette.accent)
   put(screen, 3, 10, baseline.displayName or state.queuedDisplayName or "-- waiting for a batch --", palette.ink)
   put(screen, 3, 11, baseline.name or state.queuedName or "", palette.muted)
@@ -99,6 +103,16 @@ function M.draw(screen, state, config, devices, now)
       - ((now or 0) - (state.queuedAt or now or 0)))
     put(screen, 3, 13, string.format("STACK %d / %d max   QUIET %.2fs",
       state.queuedCount or 0, math.min(64, config.batch_limit or 64), waiting), palette.accent)
+  elseif state.phase == "unknown_wait" then
+    local remaining = math.max(0, (config.unknown_timeout_seconds or 180)
+      - ((now or 0) - (state.unknownSince or now or 0)))
+    local minutes = math.floor(remaining / 60)
+    local seconds = math.floor(remaining % 60)
+    put(screen, 3, 13, string.format("WARNING: UNKNOWN ITEM   EJECT IN %02d:%02d",
+      minutes, seconds), palette.warning)
+    if h >= 19 then
+      put(screen, 3, 14, "ID/NBT CHANGE -> EJECT IMMEDIATELY", palette.warning)
+    end
   elseif state.phase == "processing" then
     put(screen, 3, 13, string.format("BLASTING  %.1fs   /   IN PROGRESS", elapsed), palette.warning)
     if h >= 19 then
@@ -127,6 +141,8 @@ function M.draw(screen, state, config, devices, now)
     if messageY + 1 < h - 2 and #first > width then
       put(screen, 3, messageY + 1, first:sub(width + 1, width * 2), palette.bad)
     end
+  elseif state.phase == "unknown_wait" then
+    put(screen, 3, messageY, "! UNKNOWN RESOURCE ON DEPOT - WATCHING CHANGE", palette.warning)
   elseif devices.networkReady == false then
     put(screen, 3, messageY, "! " .. (devices.networkHint or "Connect wired inventories"), palette.warning)
   elseif not devices.output then

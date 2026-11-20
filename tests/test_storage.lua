@@ -24,7 +24,8 @@ storage.load = function()
 end
 local config = storage.loadConfig()
 assert(config.poll_seconds == 0.05, "old 0.5s default must migrate to 0.05s")
-assert(config.monitor_refresh_hz == 20 and config.settings_version == 2)
+assert(config.monitor_refresh_hz == 20 and config.settings_version == 3)
+assert(config.settle_seconds == 0.25 and config.feed_delay_seconds == nil)
 assert(config.enabled == true and config.batch_limit == 16)
 assert(saved == config, "migration must be persisted")
 
@@ -39,8 +40,17 @@ assert(saved == custom)
 
 saved = nil
 storage.load = function()
-  return { settings_version = 2, poll_seconds = 0.05 }
+  return { settings_version = 2, poll_seconds = 0.05, feed_delay_seconds = 2 }
 end
-storage.loadConfig()
+local migrated = storage.loadConfig()
+assert(migrated.settings_version == 3 and migrated.settle_seconds == 0.25)
+assert(migrated.feed_delay_seconds == nil and saved == migrated)
+
+saved = nil
+storage.load = function()
+  return { settings_version = 3, poll_seconds = 0.05, settle_seconds = 0.5 }
+end
+local current = storage.loadConfig()
+assert(current.settle_seconds == 0.5)
 assert(saved == nil, "already migrated config must not be rewritten")
-print("OK: refresh migration and custom setting preservation")
+print("OK: stabilization migration and custom setting preservation")

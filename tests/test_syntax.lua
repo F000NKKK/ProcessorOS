@@ -8,7 +8,7 @@ for line in manifest:lines() do
   end
 end
 manifest:close()
-for _, path in ipairs({ "install.lua", "startup.lua", "update", "tests/test_core.lua", "tests/test_ui.lua", "tests/test_install.lua", "tests/test_renderer.lua", "tests/test_storage.lua" }) do
+for _, path in ipairs({ "install.lua", "startup.lua", "update", "tests/test_core.lua", "tests/test_ui.lua", "tests/test_install.lua", "tests/test_renderer.lua", "tests/test_storage.lua", "tests/test_parallel_main.lua" }) do
   local chunk, err = loadfile(path)
   assert(chunk, path .. ": " .. tostring(err))
   checked = checked + 1

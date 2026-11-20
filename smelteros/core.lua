@@ -174,7 +174,9 @@ function M.step(state, config, devices, persistence)
       state.queuedDisplayName = detail.displayName or detail.name
       state.queuedName = detail.name
       state.queuedCount = quantity
-      save(state, persistence)
+      -- This is only a pre-transfer timer. Persisting every count change
+      -- could write to the virtual disk 20 times/second during AE2 delivery.
+      -- The actual transfer intent is journaled durably before pushItems.
     end
     local quietSeconds = math.max(0, config.settle_seconds or 0.25)
     -- A full stack is immediately ready; smaller deliveries wait until stable.

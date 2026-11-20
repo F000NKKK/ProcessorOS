@@ -43,7 +43,7 @@ for _, size in ipairs({ { 76, 19 }, { 40, 16 }, { 110, 22 } }) do
   assert(not table.concat(screen.lines):find("EST.", 1, true))
   if size[2] >= 19 then
     local firstPulseX = screen.lastPulseX
-    ui.draw(screen, state, config, devices, 110)
+    ui.draw(screen, state, config, devices, 109.1)
     assert(screen.lastPulseX ~= firstPulseX, "indeterminate bar did not move")
   end
   assert(ui.touch(screen, 4, size[2] - 2) == "toggle")

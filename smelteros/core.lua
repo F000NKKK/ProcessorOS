@@ -139,7 +139,7 @@ function M.step(state, config, devices, persistence)
     state.queuedName = detail.name
     state.queuedCount = inItem.count or detail.count
     state.error = nil
-    save(state, persistence) -- persist the two-second accumulation window
+    save(state, persistence) -- persist the beginning of the quiet window
   end
 
   if state.phase == "gathering" then
@@ -163,20 +163,24 @@ function M.step(state, config, devices, persistence)
     end
     local detail = devices.inputPeripheral.getItemDetail(inSlot) or inItem
     local fingerprint = M.fingerprint(detail)
-    if inSlot ~= state.queuedSlot or fingerprint ~= state.queuedFingerprint then
-      -- Input item changed while staging; give the new item its own full delay.
+    local quantity = inItem.count or detail.count or 0
+    local threshold = math.max(1, math.min(64, config.batch_limit or 64))
+    if inSlot ~= state.queuedSlot or fingerprint ~= state.queuedFingerprint
+      or quantity ~= state.queuedCount then
+      -- Reset quiet timer whenever the item OR the available count changes.
       state.queuedAt = now()
       state.queuedSlot = inSlot
       state.queuedFingerprint = fingerprint
       state.queuedDisplayName = detail.displayName or detail.name
       state.queuedName = detail.name
-      state.queuedCount = inItem.count or detail.count
+      state.queuedCount = quantity
       save(state, persistence)
+    end
+    local quietSeconds = math.max(0, config.settle_seconds or 0.25)
+    -- A full stack is immediately ready; smaller deliveries wait until stable.
+    if quantity < threshold and now() - (state.queuedAt or now()) < quietSeconds then
       return
     end
-    state.queuedCount = inItem.count or detail.count
-    local waitSeconds = math.max(0, config.feed_delay_seconds or 2)
-    if now() - (state.queuedAt or now()) < waitSeconds then return end
 
     state.baseline = {
       name = detail.name,

@@ -13,7 +13,8 @@ local persistence = {
   end,
 }
 
-local config = { enabled = true, batch_limit = 64, settle_seconds = 0.25, timeout_seconds = 300 }
+local config = { enabled = true, batch_limit = 64, settle_seconds = 0.25,
+  timeout_seconds = 300, unknown_timeout_seconds = 180 }
 
 local function makeDevices(initial, outputAccepts)
   local depot = { item = initial }
@@ -114,7 +115,85 @@ local function testUnknownDepot()
   local devices, depot = makeDevices({ name = "minecraft:iron_ingot", count = 1 })
   local state = core.newState()
   core.step(state, config, devices, persistence)
-  assert(state.phase == "fault" and depot.item ~= nil)
+  assert(state.phase == "unknown_wait" and depot.item ~= nil)
+  advance(179)
+  core.step(state, config, devices, persistence)
+  assert(state.phase == "unknown_wait" and depot.item ~= nil)
+  advance(1.1)
+  core.step(state, config, devices, persistence)
+  assert(state.phase == "idle" and depot.item == nil)
+  assert(state.unknownRecovered == 1 and state.completed == 1)
+end
+
+local function testUnknownChangeImmediatelyEjects()
+  local devices, depot, _, output = makeDevices({ name = "minecraft:sand", count = 10 })
+  local state = core.newState()
+  core.step(state, config, devices, persistence)
+  assert(state.phase == "unknown_wait")
+  advance(0.05)
+  depot.item.name = "minecraft:glass"
+  core.step(state, config, devices, persistence)
+  assert(state.phase == "idle" and state.unknownRecovered == 1)
+  assert(output.item.name == "minecraft:glass" and output.item.count == 10)
+end
+
+local function testUnknownWaitWithAutoFeedPaused()
+  local devices, depot, _, output = makeDevices({ name = "minecraft:sand", count = 1 })
+  local state = core.newState()
+  local paused = { enabled = false, unknown_timeout_seconds = 180 }
+  core.step(state, paused, devices, persistence)
+  assert(state.phase == "unknown_wait" and output.item == nil)
+  depot.item.name = "minecraft:glass"
+  core.step(state, paused, devices, persistence)
+  assert(state.phase == "idle" and output.item.name == "minecraft:glass")
+end
+
+local function testUnknownNbtChangeAndCountIgnored()
+  local devices, depot, _, output = makeDevices({ name = "mod:special", nbt = "a", count = 3 })
+  local state = core.newState()
+  core.step(state, config, devices, persistence)
+  depot.item.count = 2
+  advance(1)
+  core.step(state, config, devices, persistence)
+  assert(state.phase == "unknown_wait" and output.item == nil)
+  depot.item.nbt = "b"
+  core.step(state, config, devices, persistence)
+  assert(state.phase == "idle" and output.item.nbt == "b")
+end
+
+local function testUnknownOutputRefusalPreservesItem()
+  local devices, depot, _, output = makeDevices({ name = "minecraft:sand", count = 1 }, false)
+  local state = core.newState()
+  core.step(state, config, devices, persistence)
+  advance(181)
+  core.step(state, config, devices, persistence)
+  assert(state.phase == "fault" and state.faultFrom == "unloading")
+  assert(depot.item ~= nil and state.unknownBaseline ~= nil)
+  output.accepts = true
+  core.retry(state, persistence)
+  core.step(state, config, devices, persistence)
+  assert(state.phase == "idle" and state.unknownRecovered == 1)
+end
+
+local function testLegacyUnknownFaultMigrates()
+  local devices, depot = makeDevices({ name = "minecraft:sand", count = 1 })
+  local state = core.newState()
+  state.phase = "fault"
+  state.faultFrom = "idle"
+  state.error = "Unknown item on depot. Clear it manually; no baseline to compare."
+  core.step(state, config, devices, persistence)
+  assert(state.phase == "unknown_wait" and state.error == nil)
+  assert(state.unknownBaseline.name == depot.item.name)
+end
+
+local function testUnknownAppearsDuringGathering()
+  local devices, depot = makeDevices()
+  local state = core.newState()
+  core.step(state, config, devices, persistence)
+  assert(state.phase == "gathering")
+  depot.item = { name = "minecraft:sand", count = 1 }
+  core.step(state, config, devices, persistence)
+  assert(state.phase == "unknown_wait" and state.queuedAt == nil)
 end
 
 local function testRecovery()
@@ -223,6 +302,12 @@ testNormal()
 testNbtOnly()
 testOutputDenied()
 testUnknownDepot()
+testUnknownChangeImmediatelyEjects()
+testUnknownWaitWithAutoFeedPaused()
+testUnknownNbtChangeAndCountIgnored()
+testUnknownOutputRefusalPreservesItem()
+testLegacyUnknownFaultMigrates()
+testUnknownAppearsDuringGathering()
 testRecovery()
 testCountDoesNotTrigger()
 testWaitForWiredNetwork()
@@ -233,4 +318,4 @@ testItemChangeRestartsWait()
 testCountChangeResetsQuietTimer()
 testPauseDuringStaging()
 assert(copies > 10)
-print("OK: 13 core scenarios; " .. copies .. " journal saves")
+print("OK: 19 core scenarios; " .. copies .. " journal saves")

@@ -77,6 +77,7 @@ local function install()
   end
   -- Never touch data/config and data/state on upgrades.
   local startup = download("startup.lua")
+  local updater = download("update")
   banner("Installing core...", #files, #files + 1)
   for _, path in ipairs(files) do
     local destination = "/" .. path
@@ -96,9 +97,20 @@ local function install()
     end
   end
   write("/startup.lua", startup)
+  if fs.exists("/update") then
+    local existing = fs.open("/update", "r")
+    local oldUpdate = existing and existing.readAll() or ""
+    if existing then existing.close() end
+    if not oldUpdate:find("SmelterOS update command", 1, true) then
+      local backup = fs.combine(HOME, "previous_update")
+      if not fs.exists(backup) then fs.copy("/update", backup) end
+    end
+  end
+  write("/update", updater)
   if fs.exists(STAGE) then fs.delete(STAGE) end
   banner("Installation complete!", #files + 1, #files + 1)
   print("Existing configuration and recovery state preserved.")
+  print("Next time, run: update")
   print("Rebooting into SmelterOS...")
   sleep(1)
   os.reboot()

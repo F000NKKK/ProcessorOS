@@ -49,4 +49,16 @@ for _, size in ipairs({ { 76, 19 }, { 40, 16 }, { 110, 22 } }) do
   assert(ui.touch(screen, 4, size[2] - 2) == "toggle")
   assert(ui.touch(screen, size[1] - 3, size[2] - 2) == "retry")
 end
+do
+  local screen = screenMock(76, 19)
+  local waiting = {
+    phase = "gathering", queuedDisplayName = "Sand",
+    queuedName = "minecraft:sand", queuedCount = 64, queuedAt = 100,
+  }
+  ui.draw(screen, waiting, { enabled = true, batch_limit = 64, feed_delay_seconds = 2 }, devices, 101)
+  local all = table.concat(screen.lines)
+  assert(all:find("STACKING INPUT", 1, true))
+  assert(all:find("64 / 64", 1, true))
+  assert(all:find("FEED IN 1.0s", 1, true))
+end
 print("OK: wide monitor UI at 3 resolutions")

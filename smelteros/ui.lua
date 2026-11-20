@@ -77,7 +77,7 @@ function M.draw(screen, state, config, devices, now)
   screen.clear()
   fill(screen, 1, palette.panel)
   put(screen, 2, 1, " SMELTER / OS ", palette.accent, palette.panel)
-  put(screen, math.max(1, w - 9), 1, " v0.1.3 ", palette.ink, palette.panel)
+  put(screen, math.max(1, w - 9), 1, " v0.1.4 ", palette.ink, palette.panel)
   local stateName, stateColor = status(state, config, devices)
   center(screen, 3, "SYSTEM  " .. stateName, stateColor)
   -- A 4-wide x 2-high advanced monitor is a wide, short display.
@@ -95,9 +95,9 @@ function M.draw(screen, state, config, devices, now)
   put(screen, 3, 11, baseline.name or state.queuedName or "", palette.muted)
   local elapsed = math.max(0, (now or 0) - (state.started or now or 0))
   if state.phase == "gathering" then
-    local waiting = math.max(0, (config.feed_delay_seconds or 2)
+    local waiting = math.max(0, (config.settle_seconds or 0.25)
       - ((now or 0) - (state.queuedAt or now or 0)))
-    put(screen, 3, 13, string.format("STACK %d / %d max   FEED IN %.1fs",
+    put(screen, 3, 13, string.format("STACK %d / %d max   QUIET %.2fs",
       state.queuedCount or 0, math.min(64, config.batch_limit or 64), waiting), palette.accent)
   elseif state.phase == "processing" then
     put(screen, 3, 13, string.format("BLASTING  %.1fs   /   IN PROGRESS", elapsed), palette.warning)

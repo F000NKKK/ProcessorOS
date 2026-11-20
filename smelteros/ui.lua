@@ -77,7 +77,7 @@ function M.draw(screen, state, config, devices, now)
   screen.clear()
   fill(screen, 1, palette.panel)
   put(screen, 2, 1, " SMELTER / OS ", palette.accent, palette.panel)
-  put(screen, math.max(1, w - 9), 1, " v0.1.4 ", palette.ink, palette.panel)
+  put(screen, math.max(1, w - 9), 1, " v0.1.5 ", palette.ink, palette.panel)
   local stateName, stateColor = status(state, config, devices)
   center(screen, 3, "SYSTEM  " .. stateName, stateColor)
   -- A 4-wide x 2-high advanced monitor is a wide, short display.

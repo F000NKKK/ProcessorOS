@@ -35,7 +35,18 @@ function M.newState()
     itemsMoved = 0, transferred = 0,
     baseline = nil, started = nil, error = nil, faultFrom = nil,
     lastDuration = nil,
+    queuedAt = nil, queuedSlot = nil, queuedFingerprint = nil,
+    queuedDisplayName = nil, queuedName = nil, queuedCount = nil,
   }
+end
+
+local function clearQueue(state)
+  state.queuedAt = nil
+  state.queuedSlot = nil
+  state.queuedFingerprint = nil
+  state.queuedDisplayName = nil
+  state.queuedName = nil
+  state.queuedCount = nil
 end
 
 local function recordDuration(state, config)
@@ -120,16 +131,63 @@ function M.step(state, config, devices, persistence)
     if inErr then return fault(state, persistence, "Input: " .. inErr) end
     if not inSlot then return end
     local detail = devices.inputPeripheral.getItemDetail(inSlot) or inItem
+    state.phase = "gathering"
+    state.queuedAt = now()
+    state.queuedSlot = inSlot
+    state.queuedFingerprint = M.fingerprint(detail)
+    state.queuedDisplayName = detail.displayName or detail.name
+    state.queuedName = detail.name
+    state.queuedCount = inItem.count or detail.count
+    state.error = nil
+    save(state, persistence) -- persist the two-second accumulation window
+  end
+
+  if state.phase == "gathering" then
+    if not config.enabled or devices.networkReady == false then
+      state.phase = "idle"
+      clearQueue(state)
+      save(state, persistence)
+      return
+    end
+    if slot then
+      return fault(state, persistence, "Unknown item appeared on depot while waiting")
+    end
+    if not devices.inputPeripheral then return end
+    local inSlot, inItem, inErr = onlyItem(devices.inputPeripheral)
+    if inErr then return fault(state, persistence, "Input: " .. inErr) end
+    if not inSlot then
+      state.phase = "idle"
+      clearQueue(state)
+      save(state, persistence)
+      return
+    end
+    local detail = devices.inputPeripheral.getItemDetail(inSlot) or inItem
+    local fingerprint = M.fingerprint(detail)
+    if inSlot ~= state.queuedSlot or fingerprint ~= state.queuedFingerprint then
+      -- Input item changed while staging; give the new item its own full delay.
+      state.queuedAt = now()
+      state.queuedSlot = inSlot
+      state.queuedFingerprint = fingerprint
+      state.queuedDisplayName = detail.displayName or detail.name
+      state.queuedName = detail.name
+      state.queuedCount = inItem.count or detail.count
+      save(state, persistence)
+      return
+    end
+    state.queuedCount = inItem.count or detail.count
+    local waitSeconds = math.max(0, config.feed_delay_seconds or 2)
+    if now() - (state.queuedAt or now()) < waitSeconds then return end
+
     state.baseline = {
       name = detail.name,
       displayName = detail.displayName or detail.name,
       nbt = detail.nbt,
-      fingerprint = M.fingerprint(detail),
+      fingerprint = fingerprint,
     }
     state.inSlot = inSlot
     state.phase = "loading"
-    state.error = nil
-    save(state, persistence) -- journal INTENT before moving a single item
+    clearQueue(state)
+    save(state, persistence) -- journal INTENT before moving any items
   end
 
   if state.phase == "loading" then

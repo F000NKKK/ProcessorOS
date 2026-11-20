@@ -77,7 +77,7 @@ function M.draw(screen, state, config, devices, now)
   screen.clear()
   fill(screen, 1, palette.panel)
   put(screen, 2, 1, " SMELTER / OS ", palette.accent, palette.panel)
-  put(screen, math.max(1, w - 9), 1, " v0.1.2 ", palette.ink, palette.panel)
+  put(screen, math.max(1, w - 9), 1, " v0.1.3 ", palette.ink, palette.panel)
   local stateName, stateColor = status(state, config, devices)
   center(screen, 3, "SYSTEM  " .. stateName, stateColor)
   -- A 4-wide x 2-high advanced monitor is a wide, short display.
@@ -107,7 +107,7 @@ function M.draw(screen, state, config, devices, now)
       -- Indeterminate progress: a bouncing segment, never a guessed percentage.
       local pulse = math.min(9, barWidth)
       local range = math.max(1, barWidth - pulse)
-      local travel = math.floor(elapsed * 7) % (range * 2)
+      local travel = math.floor(elapsed * 20) % (range * 2)
       local offset = travel <= range and travel or range * 2 - travel
       put(screen, 3 + offset, 14, string.rep(" ", pulse), palette.ink, palette.warning)
     end

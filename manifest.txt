@@ -1,0 +1,7 @@
+smelteros/boot.lua
+smelteros/main.lua
+smelteros/core.lua
+smelteros/devices.lua
+smelteros/storage.lua
+smelteros/ui.lua
+smelteros/config.default.lua

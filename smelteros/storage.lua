@@ -43,12 +43,17 @@ function M.loadConfig()
   M.init()
   local default = dofile("/smelteros/config.default.lua")
   local custom = M.load("config", {})
-  local upgraded = (tonumber(custom.settings_version) or 0) < 2
+  local previousVersion = tonumber(custom.settings_version) or 0
+  local upgraded = previousVersion < 3
   if upgraded then
     -- Existing 0.5-second defaults would otherwise survive every OS update.
     -- Preserve custom polling intervals other than the former stock default.
-    if custom.poll_seconds == 0.5 then custom.poll_seconds = 0.05 end
-    custom.settings_version = 2
+    if previousVersion < 2 and custom.poll_seconds == 0.5 then
+      custom.poll_seconds = 0.05
+    end
+    -- The fixed 2-second delay has been replaced with count stabilization.
+    custom.feed_delay_seconds = nil
+    custom.settings_version = 3
   end
   for key in pairs(default) do
     if custom[key] == nil then custom[key] = default[key] end

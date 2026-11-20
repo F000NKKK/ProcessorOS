@@ -45,4 +45,13 @@ assert(calls == height + 1 and written - originalWritten <= 10, "diff too large"
 width = 65
 render("SMELTER Xs")
 assert(calls == height + 1 + height, "resize must redraw whole screen")
+local yields = 0
+width = 66
+buffer.setBackgroundColor(colors.black)
+buffer.clear()
+buffer.setCursorPos(2, 2)
+buffer.setTextColor(colors.cyan)
+buffer.write("SMELTER Xs")
+buffer.flush(function() yields = yields + 1 end)
+assert(yields == 3, "full redraw should cooperatively yield every six rows")
 print("OK: framebuffer diff, identical frame suppression, resize")

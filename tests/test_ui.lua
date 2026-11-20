@@ -61,4 +61,18 @@ do
   assert(all:find("64 / 64", 1, true))
   assert(all:find("QUIET 0.15s", 1, true))
 end
+do
+  local screen = screenMock(76, 19)
+  local unknown = {
+    phase = "unknown_wait", unknownSince = 100,
+    unknownBaseline = { displayName = "Sand", name = "minecraft:sand" },
+  }
+  ui.draw(screen, unknown,
+    { enabled = false, unknown_timeout_seconds = 180 }, devices, 130)
+  local all = table.concat(screen.lines)
+  assert(all:find("UNKNOWN DEPOT ITEM", 1, true))
+  assert(all:find("EJECT IN 02:30", 1, true))
+  assert(all:find("ID/NBT CHANGE", 1, true))
+  assert(all:find("minecraft:sand", 1, true))
+end
 print("OK: wide monitor UI at 3 resolutions")

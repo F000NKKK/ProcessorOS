@@ -1,5 +1,8 @@
 -- Run from the repository root with: texlua tests/test_core.lua
 local core = dofile("smelteros/core.lua")
+local clockMs = 1000000
+os.epoch = function() return clockMs end
+local function advance(seconds) clockMs = clockMs + seconds * 1000 end
 local copies = 0
 local persistence = {
   save = function(name, state)
@@ -10,7 +13,7 @@ local persistence = {
   end,
 }
 
-local config = { enabled = true, batch_limit = 64, timeout_seconds = 300 }
+local config = { enabled = true, batch_limit = 64, feed_delay_seconds = 2, timeout_seconds = 300 }
 
 local function makeDevices(initial, outputAccepts)
   local depot = { item = initial }
@@ -57,10 +60,21 @@ local function makeDevices(initial, outputAccepts)
   return devices, depot, input, output
 end
 
+local function startBatch(state, devices)
+  core.step(state, config, devices, persistence)
+  assert(state.phase == "gathering", "expected two-second staging phase")
+  advance(1)
+  core.step(state, config, devices, persistence)
+  assert(state.phase == "gathering", "premature batch before two seconds")
+  advance(1.1)
+  core.step(state, config, devices, persistence)
+  assert(state.phase == "processing", "batch did not start after two seconds")
+end
+
 local function testNormal()
   local devices, depot, _, output = makeDevices()
   local state = core.newState()
-  core.step(state, config, devices, persistence)
+  startBatch(state, devices)
   assert(state.phase == "processing" and state.batch == 1)
   core.step(state, config, devices, persistence)
   assert(state.phase == "processing" and output.item == nil)
@@ -75,7 +89,7 @@ end
 local function testNbtOnly()
   local devices, depot = makeDevices()
   local state = core.newState()
-  core.step(state, config, devices, persistence)
+  startBatch(state, devices)
   depot.item.nbt = "new"
   core.step(state, config, devices, persistence)
   assert(state.phase == "unloading")
@@ -84,7 +98,7 @@ end
 local function testOutputDenied()
   local devices, depot, _, output = makeDevices(nil, false)
   local state = core.newState()
-  core.step(state, config, devices, persistence)
+  startBatch(state, devices)
   depot.item.name = "minecraft:iron_ingot"
   core.step(state, config, devices, persistence)
   core.step(state, config, devices, persistence)
@@ -133,7 +147,7 @@ end
 local function testNoWiredRouteKeepsResult()
   local devices, depot = makeDevices()
   local state = core.newState()
-  core.step(state, config, devices, persistence)
+  startBatch(state, devices)
   depot.item.name = "minecraft:glass"
   core.step(state, config, devices, persistence)
   function depot.pushItems() error("Target 'ae2:pattern_provider_0' does not exist") end
@@ -141,6 +155,47 @@ local function testNoWiredRouteKeepsResult()
   assert(state.phase == "fault" and state.faultFrom == "unloading")
   assert(state.error:find("NO WIRED ROUTE", 1, true))
   assert(depot.item.name == "minecraft:glass")
+end
+
+local function testFullStackAfterTwoSeconds()
+  local devices, depot, input = makeDevices()
+  local state = core.newState()
+  core.step(state, config, devices, persistence)
+  assert(state.phase == "gathering" and depot.item == nil)
+  -- Pattern provider may finish sending items while we're waiting.
+  advance(1.5)
+  input.item.count = 64
+  core.step(state, config, devices, persistence)
+  assert(state.phase == "gathering" and depot.item == nil)
+  advance(0.6)
+  core.step(state, config, devices, persistence)
+  assert(state.phase == "processing" and depot.item.count == 64)
+  assert(state.itemsMoved == 64 and input.item == nil)
+end
+
+local function testItemChangeRestartsWait()
+  local devices, depot, input = makeDevices()
+  local state = core.newState()
+  core.step(state, config, devices, persistence)
+  advance(1.5)
+  input.item.name = "minecraft:raw_gold"
+  core.step(state, config, devices, persistence)
+  assert(state.phase == "gathering" and state.queuedName == "minecraft:raw_gold")
+  advance(1)
+  core.step(state, config, devices, persistence)
+  assert(state.phase == "gathering" and depot.item == nil)
+  advance(1.1)
+  core.step(state, config, devices, persistence)
+  assert(state.phase == "processing" and depot.item.name == "minecraft:raw_gold")
+end
+
+local function testPauseDuringStaging()
+  local devices, depot = makeDevices()
+  local state = core.newState()
+  core.step(state, config, devices, persistence)
+  local paused = { enabled = false }
+  core.step(state, paused, devices, persistence)
+  assert(state.phase == "idle" and depot.item == nil and state.queuedAt == nil)
 end
 
 testNormal()
@@ -151,5 +206,8 @@ testRecovery()
 testCountDoesNotTrigger()
 testWaitForWiredNetwork()
 testNoWiredRouteKeepsResult()
+testFullStackAfterTwoSeconds()
+testItemChangeRestartsWait()
+testPauseDuringStaging()
 assert(copies > 10)
-print("OK: 8 core scenarios; " .. copies .. " journal saves")
+print("OK: 11 core scenarios; " .. copies .. " journal saves")

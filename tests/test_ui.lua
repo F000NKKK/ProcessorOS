@@ -55,10 +55,10 @@ do
     phase = "gathering", queuedDisplayName = "Sand",
     queuedName = "minecraft:sand", queuedCount = 64, queuedAt = 100,
   }
-  ui.draw(screen, waiting, { enabled = true, batch_limit = 64, feed_delay_seconds = 2 }, devices, 101)
+  ui.draw(screen, waiting, { enabled = true, batch_limit = 64, settle_seconds = 0.25 }, devices, 100.1)
   local all = table.concat(screen.lines)
   assert(all:find("STACKING INPUT", 1, true))
   assert(all:find("64 / 64", 1, true))
-  assert(all:find("FEED IN 1.0s", 1, true))
+  assert(all:find("QUIET 0.15s", 1, true))
 end
 print("OK: wide monitor UI at 3 resolutions")

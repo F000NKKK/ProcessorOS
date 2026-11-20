@@ -122,11 +122,34 @@ local function testCountDoesNotTrigger()
   assert(core.fingerprint(first) == core.fingerprint(second))
 end
 
+local function testWaitForWiredNetwork()
+  local devices, depot = makeDevices()
+  devices.networkReady = false
+  local state = core.newState()
+  core.step(state, config, devices, persistence)
+  assert(state.phase == "idle" and depot.item == nil)
+end
+
+local function testNoWiredRouteKeepsResult()
+  local devices, depot = makeDevices()
+  local state = core.newState()
+  core.step(state, config, devices, persistence)
+  depot.item.name = "minecraft:glass"
+  core.step(state, config, devices, persistence)
+  function depot.pushItems() error("Target 'ae2:pattern_provider_0' does not exist") end
+  core.step(state, config, devices, persistence)
+  assert(state.phase == "fault" and state.faultFrom == "unloading")
+  assert(state.error:find("NO WIRED ROUTE", 1, true))
+  assert(depot.item.name == "minecraft:glass")
+end
+
 testNormal()
 testNbtOnly()
 testOutputDenied()
 testUnknownDepot()
 testRecovery()
 testCountDoesNotTrigger()
+testWaitForWiredNetwork()
+testNoWiredRouteKeepsResult()
 assert(copies > 10)
-print("OK: 6 core scenarios; " .. copies .. " journal saves")
+print("OK: 8 core scenarios; " .. copies .. " journal saves")

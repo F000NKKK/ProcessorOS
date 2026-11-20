@@ -49,7 +49,7 @@ local function setMonitor()
 end
 
 setMonitor()
-print("SmelterOS 0.1.5 online")
+print("SmelterOS 0.1.6 online")
 print("Monitor: " .. tostring(devices.monitor))
 print("Auto feed: " .. tostring(config.enabled))
 print("Poll: " .. tostring(pollInterval) .. "s; target monitor: "

@@ -37,6 +37,8 @@ function M.newState()
     lastDuration = nil,
     queuedAt = nil, queuedSlot = nil, queuedFingerprint = nil,
     queuedDisplayName = nil, queuedName = nil, queuedCount = nil,
+    unknownBaseline = nil, unknownSince = nil, unknownReason = nil,
+    unknownRecovered = 0,
   }
 end
 
@@ -90,7 +92,26 @@ local function depotItem(devices)
   return slot, devices.depotPeripheral.getItemDetail(slot) or basic
 end
 
+local function beginUnknown(state, persistence, detail)
+  clearQueue(state)
+  state.phase = "unknown_wait"
+  state.unknownBaseline = {
+    name = detail.name,
+    displayName = detail.displayName or detail.name,
+    nbt = detail.nbt,
+    fingerprint = M.fingerprint(detail),
+  }
+  state.unknownSince = now()
+  state.unknownReason = nil
+  state.error = nil
+  state.faultFrom = nil
+  save(state, persistence)
+end
+
 local function markDone(state, persistence)
+  if state.unknownBaseline then
+    state.unknownRecovered = (state.unknownRecovered or 0) + 1
+  end
   state.completed = (state.completed or 0) + 1
   state.phase = "idle"
   state.baseline = nil
@@ -98,6 +119,9 @@ local function markDone(state, persistence)
   state.transferred = 0
   state.error = nil
   state.faultFrom = nil
+  state.unknownBaseline = nil
+  state.unknownSince = nil
+  state.unknownReason = nil
   save(state, persistence)
 end
 
@@ -116,16 +140,32 @@ function M.step(state, config, devices, persistence)
   local slot, item, err = depotItem(devices)
   if err then return fault(state, persistence, err) end
 
-  if state.phase == "fault" then return end
+  if state.phase == "fault" then
+    -- Upgrade old safety faults into the new quarantine policy, but do not
+    -- auto-retry unrelated output/transfer faults.
+    local message = tostring(state.error or "")
+    if message:find("Unknown item on depot", 1, true)
+      or message:find("Unknown item appeared on depot", 1, true) then
+      if slot then
+        beginUnknown(state, persistence, item)
+      else
+        state.phase, state.error, state.faultFrom = "idle", nil, nil
+        clearQueue(state)
+        save(state, persistence)
+      end
+    else
+      return
+    end
+  end
 
   if state.phase == "idle" then
+    if slot then
+      return beginUnknown(state, persistence, item)
+    end
     if not config.enabled then return end
     -- Wait for wired-network inventory names before starting a NEW batch.
     -- Existing processing/unloading batches must still be recoverable.
     if devices.networkReady == false then return end
-    if slot then
-      return fault(state, persistence, "Unknown item on depot. Clear it manually; no baseline to compare.")
-    end
     if not devices.inputPeripheral then return end
     local inSlot, inItem, inErr = onlyItem(devices.inputPeripheral)
     if inErr then return fault(state, persistence, "Input: " .. inErr) end
@@ -143,14 +183,12 @@ function M.step(state, config, devices, persistence)
   end
 
   if state.phase == "gathering" then
+    if slot then return beginUnknown(state, persistence, item) end
     if not config.enabled or devices.networkReady == false then
       state.phase = "idle"
       clearQueue(state)
       save(state, persistence)
       return
-    end
-    if slot then
-      return fault(state, persistence, "Unknown item appeared on depot while waiting")
     end
     if not devices.inputPeripheral then return end
     local inSlot, inItem, inErr = onlyItem(devices.inputPeripheral)
@@ -194,6 +232,23 @@ function M.step(state, config, devices, persistence)
     state.phase = "loading"
     clearQueue(state)
     save(state, persistence) -- journal INTENT before moving any items
+  end
+
+  if state.phase == "unknown_wait" then
+    if not state.unknownBaseline then
+      return fault(state, persistence, "Missing unknown-item fingerprint")
+    end
+    if not slot then
+      return fault(state, persistence, "Unknown depot item vanished unexpectedly")
+    end
+    local changed = M.fingerprint(item) ~= state.unknownBaseline.fingerprint
+    local timeout = math.max(0, config.unknown_timeout_seconds or 180)
+    local expired = now() - (state.unknownSince or now()) >= timeout
+    if not changed and not expired then return end
+    state.unknownReason = changed and "changed" or "timeout"
+    state.phase = "unloading"
+    save(state, persistence) -- journal BEFORE any output transfer
+    -- Fall through: changed or expired unknown items are unloaded this tick.
   end
 
   if state.phase == "loading" then

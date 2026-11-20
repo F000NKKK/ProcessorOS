@@ -24,7 +24,8 @@ storage.load = function()
 end
 local config = storage.loadConfig()
 assert(config.poll_seconds == 0.05, "old 0.5s default must migrate to 0.05s")
-assert(config.monitor_refresh_hz == 20 and config.settings_version == 3)
+assert(config.monitor_refresh_hz == 20 and config.settings_version == 4)
+assert(config.unknown_timeout_seconds == 180)
 assert(config.settle_seconds == 0.25 and config.feed_delay_seconds == nil)
 assert(config.enabled == true and config.batch_limit == 16)
 assert(saved == config, "migration must be persisted")
@@ -43,14 +44,22 @@ storage.load = function()
   return { settings_version = 2, poll_seconds = 0.05, feed_delay_seconds = 2 }
 end
 local migrated = storage.loadConfig()
-assert(migrated.settings_version == 3 and migrated.settle_seconds == 0.25)
+assert(migrated.settings_version == 4 and migrated.settle_seconds == 0.25)
 assert(migrated.feed_delay_seconds == nil and saved == migrated)
 
 saved = nil
 storage.load = function()
   return { settings_version = 3, poll_seconds = 0.05, settle_seconds = 0.5 }
 end
+local previous = storage.loadConfig()
+assert(previous.settle_seconds == 0.5 and previous.unknown_timeout_seconds == 180)
+assert(saved == previous, "v3 config should gain unknown timeout setting")
+
+saved = nil
+storage.load = function()
+  return { settings_version = 4, poll_seconds = 0.05, unknown_timeout_seconds = 240 }
+end
 local current = storage.loadConfig()
-assert(current.settle_seconds == 0.5)
+assert(current.unknown_timeout_seconds == 240)
 assert(saved == nil, "already migrated config must not be rewritten")
-print("OK: stabilization migration and custom setting preservation")
+print("OK: unknown-item timeout migration and setting preservation")

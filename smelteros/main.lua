@@ -21,7 +21,7 @@ if devices.monitorPeripheral then
   framebuffer = renderer.create(devices.monitorPeripheral)
 end
 
-print("SmelterOS 0.1.3 online")
+print("SmelterOS 0.1.4 online")
 print("Monitor: " .. tostring(devices.monitor))
 print("Auto feed: " .. tostring(config.enabled))
 

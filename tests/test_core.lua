@@ -13,7 +13,7 @@ local persistence = {
   end,
 }
 
-local config = { enabled = true, batch_limit = 64, feed_delay_seconds = 2, timeout_seconds = 300 }
+local config = { enabled = true, batch_limit = 64, settle_seconds = 0.25, timeout_seconds = 300 }
 
 local function makeDevices(initial, outputAccepts)
   local depot = { item = initial }
@@ -62,13 +62,13 @@ end
 
 local function startBatch(state, devices)
   core.step(state, config, devices, persistence)
-  assert(state.phase == "gathering", "expected two-second staging phase")
-  advance(1)
+  assert(state.phase == "gathering", "expected quiet-count staging phase")
+  advance(0.1)
   core.step(state, config, devices, persistence)
-  assert(state.phase == "gathering", "premature batch before two seconds")
-  advance(1.1)
+  assert(state.phase == "gathering", "premature batch before count stabilized")
+  advance(0.16)
   core.step(state, config, devices, persistence)
-  assert(state.phase == "processing", "batch did not start after two seconds")
+  assert(state.phase == "processing", "batch did not start after quiet interval")
 end
 
 local function testNormal()
@@ -157,36 +157,57 @@ local function testNoWiredRouteKeepsResult()
   assert(depot.item.name == "minecraft:glass")
 end
 
-local function testFullStackAfterTwoSeconds()
+local function testFullStackStartsImmediately()
   local devices, depot, input = makeDevices()
   local state = core.newState()
   core.step(state, config, devices, persistence)
   assert(state.phase == "gathering" and depot.item == nil)
-  -- Pattern provider may finish sending items while we're waiting.
-  advance(1.5)
+  -- A full stack must bypass the quiet timer, even during an active delivery.
+  advance(0.1)
   input.item.count = 64
-  core.step(state, config, devices, persistence)
-  assert(state.phase == "gathering" and depot.item == nil)
-  advance(0.6)
   core.step(state, config, devices, persistence)
   assert(state.phase == "processing" and depot.item.count == 64)
   assert(state.itemsMoved == 64 and input.item == nil)
+end
+
+local function testAlreadyFullOnArrival()
+  local devices, depot, input = makeDevices()
+  input.item.count = 64
+  local state = core.newState()
+  core.step(state, config, devices, persistence)
+  assert(state.phase == "processing" and depot.item.count == 64)
 end
 
 local function testItemChangeRestartsWait()
   local devices, depot, input = makeDevices()
   local state = core.newState()
   core.step(state, config, devices, persistence)
-  advance(1.5)
+  advance(0.15)
   input.item.name = "minecraft:raw_gold"
   core.step(state, config, devices, persistence)
   assert(state.phase == "gathering" and state.queuedName == "minecraft:raw_gold")
-  advance(1)
+  advance(0.1)
   core.step(state, config, devices, persistence)
   assert(state.phase == "gathering" and depot.item == nil)
-  advance(1.1)
+  advance(0.16)
   core.step(state, config, devices, persistence)
   assert(state.phase == "processing" and depot.item.name == "minecraft:raw_gold")
+end
+
+local function testCountChangeResetsQuietTimer()
+  local devices, depot, input = makeDevices()
+  local state = core.newState()
+  core.step(state, config, devices, persistence)
+  advance(0.2)
+  input.item.count = 10
+  core.step(state, config, devices, persistence)
+  assert(state.phase == "gathering" and state.queuedCount == 10)
+  advance(0.1)
+  core.step(state, config, devices, persistence)
+  assert(state.phase == "gathering" and depot.item == nil)
+  advance(0.16)
+  core.step(state, config, devices, persistence)
+  assert(state.phase == "processing" and depot.item.count == 10)
 end
 
 local function testPauseDuringStaging()
@@ -206,8 +227,10 @@ testRecovery()
 testCountDoesNotTrigger()
 testWaitForWiredNetwork()
 testNoWiredRouteKeepsResult()
-testFullStackAfterTwoSeconds()
+testFullStackStartsImmediately()
+testAlreadyFullOnArrival()
 testItemChangeRestartsWait()
+testCountChangeResetsQuietTimer()
 testPauseDuringStaging()
 assert(copies > 10)
-print("OK: 11 core scenarios; " .. copies .. " journal saves")
+print("OK: 13 core scenarios; " .. copies .. " journal saves")

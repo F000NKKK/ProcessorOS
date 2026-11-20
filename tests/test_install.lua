@@ -4,6 +4,7 @@ local files, dirs = {}, { ["/"] = true, ["/smelteros"] = true,
 local preservedConfig = "{enabled=true,output='output_chest'}"
 files["/smelteros/data/config"] = preservedConfig
 files["/startup.lua"] = "print('my old startup')"
+files["/update"] = "print('my own update utility')"
 
 local function normalize(path)
   path = path:gsub("//+", "/")
@@ -75,12 +76,15 @@ os.reboot = function() rebootCount = rebootCount + 1 end
 dofile("install.lua")
 assert(files["/smelteros/data/config"] == preservedConfig)
 assert(files["/smelteros/previous_startup.lua"] == "print('my old startup')")
+assert(files["/smelteros/previous_update"] == "print('my own update utility')")
 assert(files["/smelteros/main.lua"] and files["/smelteros/core.lua"])
+assert(files["/update"]:find("SmelterOS update command", 1, true))
 assert(files["/startup.lua"]:find("SmelterOS autorun entry point", 1, true))
 assert(rebootCount == 1)
 
 dofile("install.lua")
 assert(files["/smelteros/data/config"] == preservedConfig)
 assert(files["/smelteros/previous_startup.lua"] == "print('my old startup')")
+assert(files["/smelteros/previous_update"] == "print('my own update utility')")
 assert(rebootCount == 2)
-print("OK: first install + upgrade keep config and previous startup")
+print("OK: first install + upgrade keep config, previous startup and /update")

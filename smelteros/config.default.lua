@@ -6,6 +6,7 @@ return {
   output = "auto",            -- AE2 Pattern Provider
   monitor = "auto",           -- horizontal 4x2 advanced monitor
   batch_limit = 64,
+  feed_delay_seconds = 2,     -- wait for a supplier to finish delivering a stack
   poll_seconds = 0.5,
   timeout_seconds = 300,
   monitor_scale = 0.5,

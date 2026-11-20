@@ -60,18 +60,22 @@ function M.create(monitor)
     obj.cursorX = x + #s
   end
 
-  function obj.flush()
+  function obj.flush(yieldFrame)
     local width, height = monitor.getSize()
     if width ~= lastWidth or height ~= lastHeight then
       previous = {}
       lastWidth, lastHeight = width, height
     end
+    local writes = 0
     for y = 1, height do
+      local changed = false
       local current = rows[y] or blank(width, obj.fg, obj.bg)
       local before = previous[y]
       if not before then
         monitor.setCursorPos(1, y)
         monitor.blit(current.text, current.fg, current.bg)
+        writes = writes + 1
+        changed = true
       elseif before.text ~= current.text or before.fg ~= current.fg or before.bg ~= current.bg then
         local first, last
         for x = 1, width do
@@ -86,9 +90,14 @@ function M.create(monitor)
           monitor.setCursorPos(first, y)
           monitor.blit(current.text:sub(first, last),
             current.fg:sub(first, last), current.bg:sub(first, last))
+          writes = writes + 1
+          changed = true
         end
       end
       previous[y] = current
+      -- Cooperative yield on full redraws (startup/resize), so a large
+      -- monitor refresh cannot monopolize the CC scheduler for an entire tick.
+      if yieldFrame and changed and writes % 6 == 0 then yieldFrame() end
     end
   end
 

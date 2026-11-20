@@ -34,12 +34,13 @@ local function center(screen, y, value, fg, bg)
   put(screen, math.max(1, math.floor((w - #str) / 2) + 1), y, str, fg, bg)
 end
 
-local function status(state, config)
+local function status(state, config, devices)
   if state.phase == "fault" then return "FAULT", palette.bad end
   if state.phase == "processing" then return "BLASTING", palette.warning end
   if state.phase == "loading" then return "FEEDING", palette.accent end
   if state.phase == "unloading" then return "UNLOADING", palette.accent end
   if not config.enabled then return "STANDBY", palette.muted end
+  if devices.networkReady == false then return "CHECK WIRED MODEMS", palette.warning end
   return "AWAITING INPUT", palette.positive
 end
 
@@ -75,8 +76,8 @@ function M.draw(screen, state, config, devices, now)
   screen.clear()
   fill(screen, 1, palette.panel)
   put(screen, 2, 1, " SMELTER / OS ", palette.accent, palette.panel)
-  put(screen, math.max(1, w - 9), 1, " v0.1.0 ", palette.ink, palette.panel)
-  local stateName, stateColor = status(state, config)
+  put(screen, math.max(1, w - 9), 1, " v0.1.1 ", palette.ink, palette.panel)
+  local stateName, stateColor = status(state, config, devices)
   center(screen, 3, "SYSTEM  " .. stateName, stateColor)
   -- A 4-wide x 2-high advanced monitor is a wide, short display.
   local half = math.floor(w / 2)
@@ -92,23 +93,36 @@ function M.draw(screen, state, config, devices, now)
   put(screen, 3, 10, baseline.displayName or "-- waiting for a batch --", palette.ink)
   put(screen, 3, 11, baseline.name or "", palette.muted)
   local elapsed = math.max(0, (now or 0) - (state.started or now or 0))
-  local estimate = math.max(1, config.estimate_seconds or 15)
   if state.phase == "processing" then
-    local percent = math.min(99, math.floor(elapsed / estimate * 100))
-    put(screen, 3, 13, string.format("TIME %ds  /  EST. %d%%", math.floor(elapsed), percent), palette.warning)
+    put(screen, 3, 13, string.format("BLASTING  %.1fs   /   IN PROGRESS", elapsed), palette.warning)
     if h >= 19 then
       local barWidth = math.max(2, w - 6)
-      local filled = math.floor(barWidth * percent / 100)
       put(screen, 3, 14, string.rep(" ", barWidth), palette.ink, palette.panel)
-      if filled > 0 then put(screen, 3, 14, string.rep(" ", filled), palette.ink, palette.warning) end
+      -- Indeterminate progress: a bouncing segment, never a guessed percentage.
+      local pulse = math.min(9, barWidth)
+      local range = math.max(1, barWidth - pulse)
+      local travel = math.floor(elapsed * 7) % (range * 2)
+      local offset = travel <= range and travel or range * 2 - travel
+      put(screen, 3 + offset, 14, string.rep(" ", pulse), palette.ink, palette.warning)
     end
   else
-    put(screen, 3, 13, "Progress is estimated; fan has no sensor", palette.muted)
+    if state.lastDuration then
+      put(screen, 3, 13, string.format("LAST BLAST %.1fs (measured)", state.lastDuration), palette.muted)
+    else
+      put(screen, 3, 13, "Progress is activity-only; no percentage", palette.muted)
+    end
   end
 
   local messageY = math.max(14, h - 4)
   if state.error then
-    put(screen, 3, messageY, "! " .. state.error, palette.bad)
+    local first = "! " .. state.error
+    local width = w - 6
+    put(screen, 3, messageY, first:sub(1, width), palette.bad)
+    if messageY + 1 < h - 2 and #first > width then
+      put(screen, 3, messageY + 1, first:sub(width + 1, width * 2), palette.bad)
+    end
+  elseif devices.networkReady == false then
+    put(screen, 3, messageY, "! " .. (devices.networkHint or "Connect wired inventories"), palette.warning)
   elseif not devices.output then
     put(screen, 3, messageY, "! Connect output (AE2 provider / chest)", palette.warning)
   end

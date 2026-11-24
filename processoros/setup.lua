@@ -102,20 +102,28 @@ end
 local function spec(p) if type(p)=="string" then return {name=p} end return p end
 local function rawEdit()
   local draft=clone(raw)
+  local draftMachines=clone(machines)
   while true do
     title("GROUP / RAW PORTS")
     for i,r in ipairs(draft) do print(i..". "..r.direction:upper().." "..r.kind:upper().." "..r.name..(peripheral.isPresent(r.name) and "" or " [OFFLINE]")) end
     print("I = + Add input   O = + Add output")
-    print("D = remove   S = accept   B = back")
+    print("D = remove + unbind   S = accept   B = back")
     local v=ask():lower()
     if v=="b" then return
-    elseif v=="s" then raw=draft; return
+    elseif v=="s" then raw=draft; machines=draftMachines; return
     elseif v=="d" then
       local i=tonumber(ask("Port number> "))
       if draft[i] then
-        local used=false
-        for _,m in ipairs(machines) do for _,b in ipairs(m.bindings or {}) do if b.raw==draft[i].id then used=true end end end
-        if used then printError("Unbind this port from machines first"); read() else table.remove(draft,i) end
+        local r=draft[i]
+        local count=0
+        for _,m in ipairs(draftMachines) do for _,b in ipairs(m.bindings or {}) do if b.raw==r.id then count=count+1 end end end
+        local confirmed=true
+        if count>0 then
+          print("Remove "..r.name.." and "..count.." machine bindings?")
+          print("Required item ports must be rebound before save.")
+          confirmed=ask("Y = remove, B = cancel> "):lower()=="y"
+        end
+        if confirmed then core.unbindRaw(draftMachines,r.id); table.remove(draft,i) end
       end
     elseif v=="i" or v=="o" then
       local dir=v=="i" and "in" or "out"
@@ -220,7 +228,13 @@ local function addMachine(index)
       local ok,e=pcall(function()
         core.compileBindings(raw,bindings,m)
         if not m.id then m.id=spec(m.ports.machine_input).name.."|"..spec(m.ports.machine_output).name end
-        local draft=clone(machines); draft[index or #draft+1]=m; core.validate({machines=draft})
+        local draft=clone(machines); draft[index or #draft+1]=m
+        local complete={}
+        for _,candidate in ipairs(draft) do
+          local ok=pcall(core.compileBindings,raw,candidate.bindings,candidate)
+          if ok then complete[#complete+1]=candidate end
+        end
+        core.validate({machines=complete})
         machines=draft
       end)
       if ok then return end

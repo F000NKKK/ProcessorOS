@@ -73,6 +73,16 @@ function M.pruneDetached(cfg,present,missing,now,grace)
   cfg.raw_ports=keep
   return removed
 end
+-- Draft-only removal: the caller must have drained machines before editing.
+function M.unbindRaw(machines,id)
+  local count=0
+  for _,m in ipairs(machines) do
+    for i=#(m.bindings or {}),1,-1 do
+      if m.bindings[i].raw==id then table.remove(m.bindings,i); count=count+1 end
+    end
+  end
+  return count
+end
 function M.compileBindings(raw,bindings,m)
   local ports,connections,seen={},{},{}
   local byId={}

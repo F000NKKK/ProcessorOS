@@ -19,3 +19,11 @@ assert(#core.pruneDetached(cfg,present,missing,0,10)==0)
 assert(#core.pruneDetached(cfg,present,missing,9,10)==0)
 assert(#core.pruneDetached(cfg,present,missing,10,10)==1)
 assert(#cfg.raw_ports==3 and m.connections[1].source=="tank_0")
+
+-- A disconnected raw port can be removed without touching the physical block.
+local fluidId=m.bindings[3].raw
+assert(core.unbindRaw(cfg.machines,fluidId)==1)
+for i=#cfg.raw_ports,1,-1 do if cfg.raw_ports[i].id==fluidId then table.remove(cfg.raw_ports,i) end end
+core.compileBindings(cfg.raw_ports,m.bindings,m); core.validate(cfg)
+assert(#m.connections==0 and m.number==17)
+core.syncTopology(cfg); assert(#cfg.raw_ports==2)

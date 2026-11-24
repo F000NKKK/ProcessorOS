@@ -182,7 +182,7 @@ end
 local function drained()
   for _,m in ipairs(config.machines) do
     local s=states[m.id] or {}
-    if s.pending or s.baseline or s.phase=="fault" then return false end
+    if s.pending or s.baseline or s.staging or s.phase=="fault" then return false end
     if not core.extraEmpty(m,io) then return false end
     for _,role in ipairs({"machine_input","machine_output"}) do
       local p=m.ports[role]; if type(p)=="string" then p={name=p} end
@@ -218,7 +218,7 @@ local function work()
           local cached=received[msg.token]
           if not cached then
             local accepted,message,action=control.apply(config,msg,wizard.localSession~=nil or updateRequested or requestedExit~=nil,store.save,function(machine)
-              local s=states[machine.id] or {}; if s.pending or s.baseline or s.phase=="fault" then return false end
+              local s=states[machine.id] or {}; if s.pending or s.baseline or s.staging or s.phase=="fault" then return false end
               if not core.extraEmpty(machine,io) then return false end
               for _,r in ipairs({"machine_input","machine_output"}) do
                 local p=machine.ports[r]; if type(p)=="string" then p={name=p} end

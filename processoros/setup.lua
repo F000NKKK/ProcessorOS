@@ -4,7 +4,7 @@ local net=dofile("/processoros/network.lua")
 local cfg=store.loadConfig()
 assert(cfg.role=="slave","Only Slave supports local machine setup. Role is fixed in config.")
 local states=store.load("state",{})
-for _,s in pairs(states) do if s.pending or s.baseline or s.phase=="fault" then error("Reconcile active machine before changing ports") end end
+for _,s in pairs(states) do if s.pending or s.baseline or s.staging or s.phase=="fault" then error("Reconcile active machine before changing ports") end end
 local function empty(p)
   if type(p)=="string" then p={name=p} end
   local inv=peripheral.wrap(p.name); assert(inv and inv.list,"Old port offline: "..p.name)
@@ -177,6 +177,7 @@ local function addMachine(index)
     print("6. Batch: "..(draftMachine.batch_size or 1))
     print("7. Timeout: "..(draftMachine.timeout or 300).."s")
     print("8. Extra ports: "..#(draftMachine.connections or {}))
+    print("9. Primary filter: "..(draftMachine.primary_filter or "ANY"))
     print("S = accept   B = discard")
     if errorText then printError(errorText) end
     write("> "); local v=read():lower(); errorText=nil
@@ -186,6 +187,9 @@ local function addMachine(index)
       local p=choose(r,"Select "..label.." "..labels[tonumber(v)],draftMachine.ports[r])
       if p then draftMachine.ports[r]=p end
     elseif v=="8" then editConnections(draftMachine)
+    elseif v=="9" then
+      title("Primary item ID (blank = any)"); write("> "); local id=read()
+      if id=="" then draftMachine.primary_filter=nil elseif id:match("^[^:]+:[^:]+$") then draftMachine.primary_filter=id else errorText="Invalid item ID" end
     elseif v=="5" then draftMachine.enabled=draftMachine.enabled==false
     elseif v=="6" or v=="7" then
       title(v=="6" and "Batch size (1-64)" or "Timeout in seconds (1-86400)")

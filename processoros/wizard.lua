@@ -127,7 +127,7 @@ function M.new(reg,net,config,states,store,core,clock,drained,registry)
       for _,r in ipairs(reg.roles) do if not w.ports[r] then report(w,"Register all four ports"); return end end
       local function name(p) return type(p)=="table" and p.name or p end
       local key=name(w.ports.machine_input).."|"..name(w.ports.machine_output)
-      local machine={id=w.original and w.original.id or key,ports=w.ports,enabled=w.enabled,batch_size=w.batch,timeout=w.timeout,connections=w.original and w.original.connections or {},mode=w.original and w.original.mode or "single"}
+      local machine={id=w.original and w.original.id or key,ports=w.ports,enabled=w.enabled,batch_size=w.batch,timeout=w.timeout,primary_filter=w.original and w.original.primary_filter,connections=w.original and w.original.connections or {},mode=w.original and w.original.mode or "single"}
       local draft={} for i,m in ipairs(config.machines) do draft[i]=m end
       local replace
       for i,m in ipairs(draft) do if m.id==key then replace=i end end

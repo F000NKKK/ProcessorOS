@@ -70,6 +70,7 @@ function M.validate(config)
       used[work]={id=m.id,label=label,role="extra "..j}
       external[raw]={label=label,role="extra "..j}
     end
+    assert(not m.primary_filter or (type(m.primary_filter)=="string" and m.primary_filter:match("^[^:]+:[^:]+$")),"Invalid primary filter")
     assert(#(m.connections or {})==0 or (m.batch_size or 1)==1,"Additional resources require batch size 1")
     assert(port(m.ports.input).name~=port(m.ports.output).name,"Input equals output")
     assert(not m.timeout or (type(m.timeout)=="number" and m.timeout>=1 and m.timeout<=86400 and m.timeout%1==0),"Invalid timeout")
@@ -119,6 +120,38 @@ function M.new(config,states,io,save,clock)
     assert(type(n)=="number" and n>=0 and n<=limit,"Invalid fluid transfer result")
     st.pending=nil; persist(); return n
   end
+  local function preflight(m,primary,slot)
+    local needs={}
+    local function need(kind,source,resource,amount,onlySlot)
+      if amount<=0 then return true end
+      local k=kind.."|"..source.."|"..resource
+      local n=needs[k]
+      if not n then n={kind=kind,source=source,resource=resource,amount=0,slot=onlySlot}; needs[k]=n end
+      n.amount=n.amount+amount
+      if n.slot~=onlySlot then n.slot=nil end
+      return true
+    end
+    need("item",primary.name,slot.item.name,1,primary.slot)
+    for _,c in ipairs(m.connections or {}) do
+      local src,dst=io(c.source),io(c.destination)
+      local method=c.kind=="fluid" and "tanks" or "list"
+      local push=c.kind=="fluid" and "pushFluid" or "pushItems"
+      if not src or not dst or not src[method] or not dst[method] or not src[push] then return false,"OFFLINE "..c.kind end
+      if c.direction=="in" then
+        local amount,other=resourceAmount(dst,c)
+        if other then return false,"WRONG "..c.kind:upper() end
+        if amount>c.amount then return false,"EXCESS "..c.kind:upper() end
+        need(c.kind,c.source,c.resource,c.amount-amount)
+      end
+    end
+    for _,n in pairs(needs) do
+      local p=io(n.source); local available=0
+      local rows=n.kind=="fluid" and p.tanks() or p.list()
+      for i,v in pairs(rows) do if v.name==n.resource and (not n.slot or n.slot==i) then available=available+(n.kind=="fluid" and v.amount or v.count) end end
+      if available<n.amount then return false,"WAITING "..n.kind:upper() end
+    end
+    return true
+  end
   local function extra(m,st,load)
     for _,c in ipairs(m.connections or {}) do
       local src,dst=io(c.source),io(c.destination)
@@ -138,7 +171,7 @@ function M.new(config,states,io,save,clock)
           if available<c.amount-amount then self.status[m.id]="WAITING "..c.kind:upper(); return false end
           resourceMove(st,c,c.amount-amount)
           amount=resourceAmount(dst,c)
-          if amount<c.amount then self.status[m.id]="WAITING "..c.kind:upper(); return false end
+          if amount<c.amount then self.status[m.id]="STAGING "..c.kind:upper(); return false end
         end
       end
     end
@@ -162,7 +195,7 @@ function M.new(config,states,io,save,clock)
           else
             local n=transfer(st,p.machine_output,p.output,v.slot,v.item.count)
             st.completed=st.completed+n
-            if same and n==v.item.count then st.baseline=nil; st.phase="idle"; st.started=nil end
+            if same and n==v.item.count then st.baseline=nil; st.phase="idle"; st.started=nil; st.staging=nil end
             persist()
             self.status[m.id]=n>0 and "UNLOADING" or "OUTPUT BLOCKED"
           end
@@ -174,7 +207,10 @@ function M.new(config,states,io,save,clock)
       end
       return
     end
-    if not config.enabled or config.feed_hold or m.enabled==false then return end
+    if not config.enabled or config.feed_hold or m.enabled==false then
+      if st.staging then self.status[m.id]="STAGED / PAUSED" end
+      return
+    end
     if config.role=="slave" and (not config.master_id or not m.number) then return end
     if same then
       if st.baseline then return end
@@ -184,17 +220,26 @@ function M.new(config,states,io,save,clock)
       for _,v in ipairs(slots(inv.machine_input)) do if allowed(p.machine_input,v.slot) then return end end
     end
     for _,v in ipairs(slots(inv.input)) do
-      if allowed(p.input,v.slot) then
-        if not extra(m,st,true) then return end
+      if allowed(p.input,v.slot) and (not st.staging or st.staging.key==key(v.item)) and (not m.primary_filter or m.primary_filter==v.item.name) then
+        if #(m.connections or {})>0 then
+          local ok,why=preflight(m,p.input,v)
+          if not ok then self.status[m.id]=why; return end
+          if not st.staging then st.staging={key=key(v.item),started=clock()}; persist() end
+          if not extra(m,st,true) then return end
+          -- A transfer from the same raw inventory can invalidate the original slot.
+          local actual=inv.input.list()[v.slot]
+          if not actual or key(actual)~=st.staging.key then self.status[m.id]="WAITING PRIMARY"; return end
+        end
         if same then st.baseline=key(v.item); st.started=clock(); st.phase="processing" end
         local n=transfer(st,p.input,p.machine_input,v.slot,math.min(v.item.count,m.batch_size or 1))
         if n==0 and same then st.baseline=nil; st.started=nil; st.phase="idle" end
+        if n>0 then st.staging=nil end
         persist()
         self.status[m.id]=n>0 and "LOADING" or "INPUT BLOCKED"
         return
       end
     end
-    self.status[m.id]="IDLE"
+    self.status[m.id]=st.staging and "WAITING PRIMARY" or "IDLE"
   end
   local function safe(m,load)
     local ok,err=pcall(step,m,load)

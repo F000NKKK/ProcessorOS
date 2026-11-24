@@ -27,3 +27,11 @@ dst.amount=0; depot.items[1].name="water_bottle"; e.tick()
 assert(out.items[1].name=="water_bottle" and states.old.completed==1)
 assert(core.extraEmpty(m,function(n) return inv[n] end))
 print("typed resource tests passed")
+
+-- Shared stock must cover the primary and every supplementary input before staging.
+raw.items[1]={name="minecraft:iron_ingot",count=1}
+m.primary_filter="minecraft:iron_ingot"
+local hand=item("hand_0")
+m.connections[2]={kind="item",direction="in",source="raw_0",destination="hand_0",resource="minecraft:iron_ingot",amount=1}
+e.tick(); assert(e.status.old=="WAITING ITEM" and dst.amount==0 and not hand.items[1] and not states.old.staging)
+raw.items[1].count=2; e.tick(); assert(hand.items[1] and depot.items[1] and dst.amount==250 and not states.old.staging)

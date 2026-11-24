@@ -1,12 +1,19 @@
 local core=dofile("/processoros/core.lua")
 local store=dofile("/processoros/storage.lua")
 local net=dofile("/processoros/network.lua")
+local reg=dofile("/processoros/registration.lua")
+local wizardModule=dofile("/processoros/wizard.lua")
+local wizard
+local selectedNode=1
+local queue={}
+local function nodeIds(nodes) local ids={} for id in pairs(nodes) do ids[#ids+1]=id end table.sort(ids); return ids end
 local config=store.load("config",dofile("/processoros/config.default.lua"))
 local states=store.load("state",{})
 local registry=store.load("registry",{next=1,nodes={}})
 local registered=true
 for _,m in ipairs(config.machines or {}) do if not m.number then registered=false end end
 if config.role=="slave" and not registered then config.enabled=false end
+if config.role=="slave" then print(config.slave_number and string.format("Slave %03d",config.slave_number) or "Slave: waiting for Master") end
 local function clock() return os.epoch("utc")/1000 end
 local function io(name)
   local p=peripheral.wrap(name)
@@ -72,13 +79,32 @@ local function draw()
     renderer.setCursorPos(1,y); renderer.setTextColor(color or colors.white); renderer.write(text:sub(1,w))
   end
   renderer.setBackgroundColor(colors.black); renderer.clear()
-  line(1,"PROCESSOR OS / "..(config.role or "slave"):upper(),colors.cyan)
+  line(1,"PROCESSOR OS / "..(config.role or "slave"):upper()..(config.slave_number and string.format(" %03d",config.slave_number) or ""),colors.cyan)
+  if wizard and wizard.remote then
+    local w=wizard.remote
+    line(2,"REGISTER MACHINE / NODE #"..w.id,colors.cyan)
+    line(3,w.phase=="place" and "Place ONE cobblestone in selected port" or w.phase=="remove" and "Remove the marker from detected port" or tostring(w.phase),colors.yellow)
+    for i,r in ipairs(reg.roles) do
+      line(4+i,(w.role==r and "> " or "  ")..r..": "..(w.ports[r] or "NOT REGISTERED"),w.ports[r] and colors.lime or colors.white)
+    end
+    if w.candidate then line(10,"Detected: "..w.candidate.name,colors.cyan) end
+    line(12,w.error or "Touch any port to register / repeat",colors.orange)
+    line(14,"SAVE MACHINE",colors.lime); line(16,"CANCEL / BACK",colors.red)
+    renderer.flush(); return
+  end
+  if config.role=="master" then
+    local ids=nodeIds(nodes); selectedNode=math.max(1,math.min(selectedNode,#ids))
+    local id=ids[selectedNode]
+    line(4,id and ("< SELECT: "..nodes[id].name.." #"..id.." >") or "Waiting for Slaves",colors.cyan)
+    line(5,"REGISTER MACHINE",colors.lime)
+  end
   line(2,(config.role=="slave" and not registered and "SETUP REQUIRED" or (config.enabled and "PAUSE FEED" or "START FEED")).." | modems "..netCount,colors.lime)
   line(3,updateRequested and "UPDATE: DRAINING / CANCEL" or "UPDATE OS [LOCAL]",colors.yellow)
   local rows=lines()
-  local count=math.max(1,h-5)
+  local offset=config.role=="master" and 5 or 3
+  local count=math.max(1,h-offset-2)
   local pages=math.max(1,math.ceil(#rows/count)); page=math.min(page,pages)
-  for j=1,count do local r=rows[(page-1)*count+j]; if r then line(3+j,r[1],r[2]) end end
+  for j=1,count do local r=rows[(page-1)*count+j]; if r then line(offset+j,r[1],r[2]) end end
   if h>=5 then line(h-1,notice,colors.orange); line(h,"< PREV     "..page.."/"..pages.."     NEXT >",colors.cyan) end
   renderer.flush()
 end
@@ -94,10 +120,17 @@ local function drained()
   end
   return true
 end
+wizard=wizardModule.new(reg,net,config,states,store,core,clock,drained,registry)
 local drainSince
 local function work()
   while true do
-    engine.tick()
+    while #queue>0 do
+      local q=table.remove(queue,1)
+      local ok,res=pcall(wizard.receive,q[1],q[2],q[3])
+      if not ok then notice=tostring(res); printError(notice) end
+      if ok and res=="reload" then exitReason="reload"; return end
+    end
+    if wizard.localSession then wizard.tick() else engine.tick() end
     if updateRequested then
       local ok,empty=pcall(drained)
       if ok and empty then
@@ -121,12 +154,14 @@ local function display()
   end
 end
 local function toggle()
+  if wizard.localSession then notice="Registration active"; return end
   if updateRequested then notice="Cancel update first"; return end
   if config.role=="master" and #config.machines==0 then notice="Master is monitor only"; return end
   if not registered or (config.role=="slave" and not config.master_id) then notice="Register machines with Master first"; return end
   config.enabled=not config.enabled; assert(store.save("config",config))
 end
 local function requestUpdate()
+  if wizard.localSession then notice="Registration active"; return end
   if updateRequested then updateRequested=false; drainSince=nil; notice="Update cancelled; feed paused"; return end
   config.enabled=false; assert(store.save("config",config))
   updateRequested=true; notice="Drain physical machines before update"
@@ -137,7 +172,16 @@ local function input()
     if e=="monitor_touch" and monitor and a==monitorName then
       local ok,w,h=pcall(screen.getSize)
       if ok then
-      if c==2 then toggle() elseif c==3 then requestUpdate() elseif c==h then page=math.max(1,page+(b>w/2 and 1 or -1)) end
+      if wizard.remote then
+        if c>=5 and c<=8 then wizard.command("select",reg.roles[c-4])
+        elseif c==14 then wizard.command("save")
+        elseif c==16 then wizard.command("cancel") end
+      elseif config.role=="master" and c==4 then
+        selectedNode=math.max(1,selectedNode+(b>w/2 and 1 or -1))
+      elseif config.role=="master" and c==5 then
+        local id=nodeIds(nodes)[selectedNode]
+        if id and clock()-nodes[id].seen<=5 then wizard.start(id) else notice="No online Slave" end
+      elseif c==2 then toggle() elseif c==3 then requestUpdate() elseif c==h then page=math.max(1,page+(b>w/2 and 1 or -1)) end
       end
     elseif e=="peripheral" or e=="peripheral_detach" or e=="monitor_resize" then
       renderer=nil
@@ -149,14 +193,16 @@ end
 local function broadcast()
   while true do
     netCount=net.open()
-    if netCount>0 then pcall(rednet.broadcast,localPacket(),net.protocol) end
+    if netCount>0 then pcall(rednet.broadcast,localPacket(),net.protocol); pcall(wizard.heartbeat) end
     sleep(1)
   end
 end
 local function receive()
   while true do
     local sender,msg,protocol=rednet.receive()
-    if config.role=="master" and sender~=os.getComputerID() then
+    if protocol==wizardModule.protocol and sender~=os.getComputerID() then
+      if #queue<128 then queue[#queue+1]={sender,msg,protocol} end
+    elseif config.role=="master" and sender~=os.getComputerID() then
       local group=config.network_group or "factory"
       if protocol==net.protocol then net.accept(nodes,sender,msg,group,clock())
       elseif protocol==net.registration and type(msg)=="table" and msg.group==group and type(msg.nonce)=="string" then
@@ -173,6 +219,7 @@ local function receive()
   end
 end
 parallel.waitForAny(work,display,input,broadcast,receive)
+if exitReason=="reload" then os.reboot() end
 if exitReason=="update" then
   print("Updating local ProcessorOS. Feed remains paused.")
   shell.run("/processoros/update.lua")

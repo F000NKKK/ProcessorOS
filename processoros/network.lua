@@ -1,4 +1,4 @@
--- Read-only telemetry on a wired CC:T rednet network.
+-- Read-only telemetry over CC:T rednet (including Ender modems).
 local M={}
 M.protocol="processoros.telemetry.v1"
 function M.open()
@@ -7,7 +7,7 @@ function M.open()
     local p=peripheral.wrap(name)
     if p and type(p.isWireless)=="function" and type(p.transmit)=="function" then
       local ok,wireless=pcall(p.isWireless)
-      if ok and not wireless then
+      if ok then
         local opened=pcall(rednet.open,name)
         if opened then count=count+1 end
       end

@@ -45,7 +45,7 @@ local function draw()
   end
   renderer.setBackgroundColor(colors.black); renderer.clear()
   line(1,"PROCESSOR OS / "..(config.role or "slave"):upper(),colors.cyan)
-  line(2,(config.enabled and "PAUSE FEED" or "START FEED").." | wired "..netCount,colors.lime)
+  line(2,(config.enabled and "PAUSE FEED" or "START FEED").." | modems "..netCount,colors.lime)
   line(3,updateRequested and "UPDATE: DRAINING / CANCEL" or "UPDATE OS [LOCAL]",colors.yellow)
   local rows=lines()
   local count=math.max(1,h-5)

@@ -128,7 +128,8 @@ local function draw()
       line(4+i,(w.role==r and "> " or "  ")..r..": "..(w.ports[r] or "NOT REGISTERED"),w.ports[r] and colors.lime or colors.white)
     end
     if w.candidate then line(10,"Detected: "..w.candidate.name,colors.cyan) end
-    line(12,w.error or "Touch any port to register / repeat",colors.orange)
+    local err=type(w.error)=="string" and w.error~="" and w.error~="nil" and w.error or nil
+    line(12,err or "Touch any port to register / repeat",err and colors.orange or colors.lightGray)
     local done=0; for _,role in ipairs(reg.roles) do if w.ports[role] then done=done+1 end end
     line(13,"Ports: ["..string.rep("#",done)..string.rep("-",4-done).."] "..done.."/4",colors.cyan)
     line(14,w.phase=="saving" and "SAVING..." or "SAVE MACHINE",colors.lime); line(16,w.phase=="saved" and "DONE / BACK" or "CANCEL / BACK",colors.red)

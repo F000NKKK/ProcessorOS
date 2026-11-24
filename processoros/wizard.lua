@@ -6,7 +6,8 @@ function M.new(reg,net,config,states,store,core,clock,drained,registry)
   local group=config.network_group or "factory"
   local function send(id,msg) msg.group=group; rednet.send(id,msg,M.protocol) end
   local function report(w,err)
-    send(w.owner,{kind="status",token=w.token,phase=w.phase,role=w.role,ports=w.ports,candidate=w.candidate,error=err})
+    w.error=err
+    send(w.owner,{kind="status",token=w.token,phase=w.phase,role=w.role,ports=w.ports,candidate=w.candidate,error=w.error})
   end
   function self.start(id,number)
     self.remote={id=id,token=tostring(os.getComputerID())..":"..os.epoch("utc"),phase="connecting",ports={},seen=clock()}
@@ -23,7 +24,7 @@ function M.new(reg,net,config,states,store,core,clock,drained,registry)
     if clock()-w.last>30 then self.localSession=nil; return end
     if w.phase=="baseline" or w.phase=="place" or w.phase=="remove" then
       local ok,err=pcall(function() return reg.observe(w,reg.snapshot()) end)
-      report(w,ok and err or tostring(err))
+      if ok then report(w,err) else report(w,tostring(err)) end
     end
   end
   function self.heartbeat()
@@ -92,7 +93,7 @@ function M.new(reg,net,config,states,store,core,clock,drained,registry)
     w.last=clock()
     if msg.kind=="cancel" then self.localSession=nil
     elseif msg.kind=="ping" then
-      report(w)
+      report(w,w.error)
       if w.phase=="saving" then send(sender,{kind="allocate",token=w.token,key=w.machine.id}) end
     elseif msg.kind=="select" and w.phase~="saving" then
       if w.phase=="remove" then report(w,"Remove current marker first"); return end

@@ -51,6 +51,28 @@ function M.syncTopology(cfg)
   cfg.raw_ports=raw
   return cfg
 end
+-- Remove only disconnected, unreferenced group ports after a continuous grace period.
+-- Never erase a live machine's configuration because a chunk or modem disappeared.
+function M.pruneDetached(cfg,present,missing,now,grace)
+  local used={}
+  for _,m in ipairs(cfg.machines or {}) do
+    for _,r in ipairs(roles) do local p=port(m.ports[r]); used[p.name]=true end
+    for _,c in ipairs(m.connections or {}) do used[c.source]=true; used[c.destination]=true end
+  end
+  local keep,removed={},{}
+  for _,r in ipairs(cfg.raw_ports or {}) do
+    if present(r.name) then missing[r.id]=nil
+    else missing[r.id]=missing[r.id] or now end
+    if not used[r.name] and missing[r.id] and now-missing[r.id]>=grace then
+      removed[#removed+1]=r.name; missing[r.id]=nil
+      for _,k in ipairs({"main_input","main_output"}) do
+        if cfg[k] and port(cfg[k]).name==r.name then cfg[k]=nil end
+      end
+    else keep[#keep+1]=r end
+  end
+  cfg.raw_ports=keep
+  return removed
+end
 function M.compileBindings(raw,bindings,m)
   local ports,connections,seen={},{},{}
   local byId={}
@@ -80,11 +102,11 @@ function M.compileBindings(raw,bindings,m)
   if #connections>0 then m.batch_size=1 end
   return m
 end
-function M.extraEmpty(m,io,allowTools)
+function M.extraEmpty(m,io,allowTools,allowOffline)
   for _,c in ipairs(m.connections or {}) do
     local p=io(c.direction=="out" and c.source or c.destination)
-    if not p then return false end
-    if c.kind=="fluid" then
+    if not p then if not allowOffline then return false end
+    elseif c.kind=="fluid" then
       if not p.tanks then return false end
       for _,v in pairs(p.tanks()) do
         if v.amount>0 and not (allowTools and c.direction=="in" and not c.resource) then return false end

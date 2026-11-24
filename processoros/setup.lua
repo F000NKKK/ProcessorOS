@@ -7,10 +7,10 @@ local states=store.load("state",{})
 for _,s in pairs(states) do if s.pending or s.baseline or s.active or s.staging or s.phase=="fault" then error("Reconcile active machine before changing ports") end end
 local function empty(p)
   if type(p)=="string" then p={name=p} end
-  local inv=peripheral.wrap(p.name); assert(inv and inv.list,"Old port offline: "..p.name)
+  local inv=peripheral.wrap(p.name); if not inv then return end; assert(inv.list,"Invalid old port: "..p.name)
   for slot in pairs(inv.list()) do assert(p.slot and slot~=p.slot,"Drain old working ports first") end
 end
-for _,m in ipairs(cfg.machines or {}) do empty(m.ports.machine_input); empty(m.ports.machine_output); assert(core.extraEmpty(m,peripheral.wrap),"Drain additional working ports first") end
+for _,m in ipairs(cfg.machines or {}) do empty(m.ports.machine_input); empty(m.ports.machine_output); assert(core.extraEmpty(m,peripheral.wrap,false,true),"Drain additional working ports first") end
 assert(net.open()>0,"No modem")
 local group=cfg.network_group or "factory"
 local master=cfg.master_id
@@ -104,7 +104,7 @@ local function rawEdit()
   local draft=clone(raw)
   while true do
     title("GROUP / RAW PORTS")
-    for i,r in ipairs(draft) do print(i..". "..r.direction:upper().." "..r.kind:upper().." "..r.name) end
+    for i,r in ipairs(draft) do print(i..". "..r.direction:upper().." "..r.kind:upper().." "..r.name..(peripheral.isPresent(r.name) and "" or " [OFFLINE]")) end
     print("I = + Add input   O = + Add output")
     print("D = remove   S = accept   B = back")
     local v=ask():lower()
@@ -181,15 +181,15 @@ local function addMachine(index)
     -- First-time registration walks through group ports immediately.
     for _,r in ipairs(raw) do
       title("CONNECT / "..r.kind:upper().." "..r.name)
-      print("Enter = connect, K = skip")
-      if ask():lower()~="k" then bind(r) end
+      print("Enter = connect, K = skip / NONE")
+      local answer=ask():lower(); if answer~="k" and answer~="b" and answer~="n" then bind(r) end
     end
   end
   local err
   while true do
     title("MACHINE "..tostring(m.number or "NEW").." / PORTS")
     for i,b in ipairs(bindings) do
-      print(i..". "..b.direction:upper().." "..b.kind:upper().." "..b.name..(b.primary and " [MAIN]" or (b.resource and " [FIXED]" or " [AUTO]")))
+      print(i..". "..b.direction:upper().." "..b.kind:upper().." "..b.name..(peripheral.isPresent(b.name) and "" or " [OFFLINE]")..(b.primary and " [MAIN]" or (b.resource and " [FIXED]" or " [AUTO]")))
     end
     print("I = + Add input  O = + Add output")
     print("D = remove  E = rebind  R = optional filter")
@@ -248,6 +248,10 @@ while true do
       local draft=clone(machines)
       for _,m in ipairs(draft) do core.compileBindings(raw,m.bindings,m) end
       core.validate({machines=draft})
+      for _,m in ipairs(draft) do
+        for _,p in pairs(m.ports) do assert(peripheral.isPresent(spec(p).name),"Rebind disconnected port "..spec(p).name) end
+        for _,c in ipairs(m.connections or {}) do assert(peripheral.isPresent(c.source) and peripheral.isPresent(c.destination),"Rebind disconnected connection "..c.source.." -> "..c.destination) end
+      end
       local keys={} for _,m in ipairs(draft) do if not m.number then keys[#keys+1]=m.id end end
       if #keys>0 then
         local reply=request("allocate",keys)

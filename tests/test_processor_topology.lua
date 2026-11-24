@@ -10,3 +10,12 @@ assert(not pcall(core.compileBindings,cfg.raw_ports,m.bindings,m))
 m.bindings[3]=removed
 core.compileBindings(cfg.raw_ports,m.bindings,m)
 print("topology migration tests passed")
+
+local unused={id="unused",name="tank_99",kind="fluid",direction="out"}
+cfg.raw_ports[#cfg.raw_ports+1]=unused
+local missing={}
+local function present(name) return name~="tank_99" and name~="tank_0" end
+assert(#core.pruneDetached(cfg,present,missing,0,10)==0)
+assert(#core.pruneDetached(cfg,present,missing,9,10)==0)
+assert(#core.pruneDetached(cfg,present,missing,10,10)==1)
+assert(#cfg.raw_ports==3 and m.connections[1].source=="tank_0")

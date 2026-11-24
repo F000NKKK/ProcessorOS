@@ -179,15 +179,15 @@ local function draw()
   if h>=5 then line(h-1,notice,colors.orange); line(h,"< PREV     "..page.."/"..pages.."     NEXT >",colors.cyan) end
   renderer.flush()
 end
-local function drained()
+local function drained(allowOffline)
   for _,m in ipairs(config.machines) do
     local s=states[m.id] or {}
     if s.pending or s.baseline or s.active or s.staging or s.phase=="fault" then return false end
-    if not core.extraEmpty(m,io,updateRequested==true) then return false end
+    if not core.extraEmpty(m,io,updateRequested==true,allowOffline) then return false end
     for _,role in ipairs({"machine_input","machine_output"}) do
       local p=m.ports[role]; if type(p)=="string" then p={name=p} end
-      local inv=io(p.name); if not inv then return false end
-      for slot in pairs(inv.list()) do if not p.slot or p.slot==slot then return false end end
+      local inv=io(p.name); if not inv then if not allowOffline then return false end
+      else for slot in pairs(inv.list()) do if not p.slot or p.slot==slot then return false end end end
     end
   end
   return true
@@ -202,6 +202,7 @@ local function sendControl(id,action,enabled,number)
   local ok,sent=pcall(rednet.send,id,msg,control.protocol)
   if not ok or not sent then pending[token]=nil; notice="Command not sent" else notice="Command sent; awaiting ACK" end
 end
+local missingPorts={}
 local function work()
   while true do
     while #queue>0 do
@@ -238,13 +239,17 @@ local function work()
       if ok and res=="reload" then exitReason="reload"; return end
     end
     for token,p in pairs(pending) do if clock()-p.at>8 then pending[token]=nil; notice="Command ACK timeout" end end
+    if config.role=="slave" and not wizard.localSession and not requestedExit and not updateRequested then
+      local removed=core.pruneDetached(config,peripheral.isPresent,missingPorts,clock(),10)
+      if #removed>0 then assert(store.save("config",config)); notice="Removed offline unused ports: "..table.concat(removed,", ") end
+    end
     if wizard.localSession then
       if wizard.localSession.phase=="draining" then engine.tick() end
       wizard.tick()
     else engine.tick() end
     if requestedExit and not wizard.localSession then
       if requestedExit=="setup" then
-        local ok,empty=pcall(drained)
+        local ok,empty=pcall(drained,true)
         if ok and empty then
           drainSince=drainSince or clock()
           if clock()-drainSince>=10 then exitReason=requestedExit; return end

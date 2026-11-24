@@ -6,6 +6,7 @@ assert(cfg.role=="slave","Only Slave supports local machine setup. Role is fixed
 local states=store.load("state",{})
 for _,s in pairs(states) do if s.pending or s.baseline or s.active or s.staging or s.phase=="fault" then error("Reconcile active machine before changing ports") end end
 local function empty(p)
+  if not p then return end
   if type(p)=="string" then p={name=p} end
   local inv=peripheral.wrap(p.name); if not inv then return end; assert(inv.list,"Invalid old port: "..p.name)
   for slot in pairs(inv.list()) do assert(p.slot and slot~=p.slot,"Drain old working ports first") end
@@ -249,7 +250,7 @@ local function addMachine(index)
     elseif v=="s" then
       local ok,e=pcall(function()
         core.compileBindings(raw,bindings,m)
-        if not m.id then m.id=spec(m.ports.machine_input).name.."|"..spec(m.ports.machine_output).name end
+        if not m.id then m.id=core.machineKey(m) end
         local draft=clone(machines); draft[index or #draft+1]=m
         local complete={}
         for _,candidate in ipairs(draft) do
@@ -268,7 +269,7 @@ if #raw==0 then rawEdit() end
 while true do
   title("CONFIGURATION / "..cfg.name)
   print("Raw ports: "..#raw.." | Machines: "..#machines)
-  for i,m in ipairs(machines) do print(i..". "..tostring(m.number or "NEW").." "..spec(m.ports.machine_input).name) end
+  for i,m in ipairs(machines) do print(i..". "..tostring(m.number or "NEW").." "..(m.ports.machine_input and spec(m.ports.machine_input).name or m.id)) end
   print("I = group ports   A = add machine")
   print("New bindings default to AUTO")
   print("E = edit machine  G = rename group")

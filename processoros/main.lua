@@ -192,8 +192,10 @@ local function drained(allowOffline)
     if not core.extraEmpty(m,io,updateRequested==true,allowOffline) then return false end
     for _,role in ipairs({"machine_input","machine_output"}) do
       local p=m.ports[role]; if type(p)=="string" then p={name=p} end
-      local inv=io(p.name); if not inv then if not allowOffline then return false end
-      else for slot in pairs(inv.list()) do if not p.slot or p.slot==slot then return false end end end
+      if p then
+        local inv=io(p.name); if not inv then if not allowOffline then return false end
+        else for slot in pairs(inv.list()) do if not p.slot or p.slot==slot then return false end end end
+      end
     end
   end
   return true

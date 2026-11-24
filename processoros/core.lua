@@ -41,8 +41,8 @@ function M.syncTopology(cfg)
       local p=port(work)
       bindings[#bindings+1]={raw=ensure(kind,dir,rawPort),kind=kind,direction=dir,name=p.name,slot=p.slot,primary=primary,resource=c and c.resource,amount=c and c.amount,reusable=c and c.reusable}
     end
-    bind("item","in",m.ports.input,m.ports.machine_input,true)
-    bind("item","out",m.ports.output,m.ports.machine_output,true)
+    if m.ports.input then bind("item","in",m.ports.input,m.ports.machine_input,true) end
+    if m.ports.output then bind("item","out",m.ports.output,m.ports.machine_output,true) end
     for _,c in ipairs(m.connections or {}) do
       bind(c.kind,c.direction,c.direction=="in" and c.source or c.destination,c.direction=="in" and c.destination or c.source,false,c)
     end
@@ -56,7 +56,7 @@ end
 function M.pruneDetached(cfg,present,missing,now,grace)
   local used={}
   for _,m in ipairs(cfg.machines or {}) do
-    for _,r in ipairs(roles) do local p=port(m.ports[r]); used[p.name]=true end
+    for _,r in ipairs(roles) do local p=port(m.ports[r]); if p then used[p.name]=true end end
     for _,c in ipairs(m.connections or {}) do used[c.source]=true; used[c.destination]=true end
   end
   local keep,removed={},{}
@@ -131,11 +131,26 @@ function M.compileBindings(raw,bindings,m)
       connections[#connections+1]={kind=b.kind,direction=b.direction,source=b.direction=="in" and r.name or b.name,destination=b.direction=="in" and b.name or r.name,resource=b.resource,amount=b.amount,reusable=b.reusable}
     end
   end
-  for _,r in ipairs(roles) do assert(ports[r],"Select primary item input and output") end
+  if m.mode~="batch" then
+    for _,r in ipairs(roles) do assert(ports[r],"Select primary item input and output") end
+  else
+    local input,output=ports.input~=nil,ports.output~=nil
+    for _,c in ipairs(connections) do if c.direction=="in" then input=true else output=true end end
+    assert(input and output,"Batch requires at least one input and one output")
+  end
   for _,r in ipairs(raw) do if r.kind=="fluid" and r.direction=="in" then assert(seen[r.id],"Bind fluid input "..r.name) end end
   m.ports=ports; m.connections=connections; m.bindings=bindings
   if #connections>0 then m.batch_size=1 end
   return m
+end
+function M.machineKey(m)
+  local input=port(m.ports.machine_input); local output=port(m.ports.machine_output)
+  local a,b=input and input.name,output and output.name
+  for _,c in ipairs(m.connections or {}) do
+    if c.direction=="in" and not a then a=c.destination elseif c.direction=="out" and not b then b=c.source end
+  end
+  assert(a and b,"Machine requires input and output")
+  return a.."|"..b
 end
 function M.extraEmpty(m,io,allowTools,allowOffline)
   for _,c in ipairs(m.connections or {}) do
@@ -161,8 +176,14 @@ function M.validate(config)
     local label=m.number and ("Machine "..m.number) or ("Draft "..i)
     assert(type(m.id)=="string" and not ids[m.id],"Duplicate machine ID")
     ids[m.id]=true
+    assert(type(m.ports)=="table","Missing ports")
+    if m.mode=="batch" then
+      assert((m.ports.input~=nil)==(m.ports.machine_input~=nil),"Incomplete item input")
+      assert((m.ports.output~=nil)==(m.ports.machine_output~=nil),"Incomplete item output")
+    end
     for _,r in ipairs(roles) do
       local p=port(m.ports[r])
+      if p or m.mode~="batch" then
       assert(p and type(p.name)=="string" and p.name:find("_%d+$"),"Invalid wired port: "..r)
       assert(not p.slot or (type(p.slot)=="number" and p.slot>=1 and p.slot%1==0),"Invalid slot")
       if r=="machine_input" or r=="machine_output" then
@@ -170,6 +191,7 @@ function M.validate(config)
         assert(not previous or previous.id==m.id,p.name..": "..label.." "..r.." conflicts with "..(previous and previous.label or "").." "..(previous and previous.role or ""))
         used[p.name]={id=m.id,label=label,role=r}
       else external[p.name]={label=label,role=r} end
+      end
     end
     for j,c in ipairs(m.connections or {}) do
       assert(c.kind=="item" or c.kind=="fluid","Invalid resource type")
@@ -184,25 +206,38 @@ function M.validate(config)
       assert(not previous or previous.id==m.id,"Shared working inventory: "..work)
       -- Additional input must not be the primary working inventory: recipes with
       -- multiple ingredients in a common basin require a dedicated recipe executor.
-      if c.direction=="in" then
+      if c.direction=="in" and m.mode~="batch" then
         assert(work~=port(m.ports.machine_input).name or c.kind=="fluid","Additional item input needs a separate working inventory")
       end
       for k=1,j-1 do
         local other=m.connections[k]
-        assert(not (other.kind==c.kind and other.direction==c.direction and (c.direction=="in" and other.destination==work or c.direction=="out" and other.source==work)),"Duplicate working resource connection")
+        assert(not (other.kind==c.kind and other.direction==c.direction and (c.direction=="in" and other.destination==work or c.direction=="out" and other.source==work)) or (m.mode=="batch" and c.direction=="in" and other.source~=c.source),"Duplicate working resource connection")
         assert(not (other.kind==c.kind and other.direction~=c.direction and (other.direction=="in" and other.destination or other.source)==work),"Input and output cannot share an extra resource tank")
       end
       used[work]={id=m.id,label=label,role="extra "..j}
       external[raw]={label=label,role="extra "..j}
     end
     if m.mode=="batch" then
-      assert(port(m.ports.machine_input).name~=port(m.ports.machine_output).name,"Batch mode requires separate product buffer")
-      for _,c in ipairs(m.connections or {}) do assert(c.direction~="in" or not c.reusable,"Batch mode does not support tools") end
+      local inputs,outputs,rawInputs,rawOutputs={},{},{},{}
+      if m.ports.machine_input then inputs[port(m.ports.machine_input).name]=true; rawInputs[port(m.ports.input).name]=true end
+      if m.ports.machine_output then outputs[port(m.ports.machine_output).name]=true; rawOutputs[port(m.ports.output).name]=true end
+      local sources={}
+      if m.ports.input then sources["item|"..port(m.ports.input).name]=true end
+      for _,c in ipairs(m.connections or {}) do
+        assert(not c.reusable,"Batch mode does not support tools")
+        if c.direction=="in" then
+          inputs[c.destination]=true; rawInputs[c.source]=true
+          local k=c.kind.."|"..c.source; assert(not sources[k],"Batch input source already bound"); sources[k]=true
+        else outputs[c.source]=true; rawOutputs[c.destination]=true end
+      end
+      assert(next(inputs) and next(outputs),"Batch requires input and output")
+      for n in pairs(inputs) do assert(not outputs[n],"Batch mode requires separate product buffer") end
+      for n in pairs(rawInputs) do assert(not rawOutputs[n],"Batch raw input equals output") end
     end
     assert(not m.result_filter or (type(m.result_filter)=="string" and m.result_filter:match("^[^:]+:[^:]+$")),"Invalid result filter")
     assert(not m.primary_filter or (type(m.primary_filter)=="string" and m.primary_filter:match("^[^:]+:[^:]+$")),"Invalid primary filter")
     assert(#(m.connections or {})==0 or (m.batch_size or 1)==1,"Additional resources require batch size 1")
-    assert(port(m.ports.input).name~=port(m.ports.output).name,"Input equals output")
+    if m.ports.input and m.ports.output then assert(port(m.ports.input).name~=port(m.ports.output).name,"Input equals output") end
     assert(not m.timeout or (type(m.timeout)=="number" and m.timeout>=1 and m.timeout<=86400 and m.timeout%1==0),"Invalid timeout")
     assert(not m.batch_size or (type(m.batch_size)=="number" and m.batch_size>=1 and m.batch_size<=64 and m.batch_size%1==0),"Invalid batch size")
   end
@@ -439,7 +474,8 @@ function M.new(config,states,io,save,clock)
       if not job or job.phase~="processing" then return end
       local outputs,why=resolve(m,p.input,nil,false)
       if not outputs then self.status[m.id]=why; return end
-      local routes={{kind="item",source=p.machine_output.name,destination=p.output.name,sourceSlot=p.machine_output.slot,destSlot=p.output.slot}}
+      local routes={}
+      if p.machine_output then routes[1]={kind="item",source=p.machine_output.name,destination=p.output.name,sourceSlot=p.machine_output.slot,destSlot=p.output.slot} end
       for _,c in ipairs(outputs) do routes[#routes+1]=c end
       local blocked=false
       for _,r in ipairs(routes) do
@@ -459,7 +495,7 @@ function M.new(config,states,io,save,clock)
         end
       end
       local empty=true
-      for _,v in pairs(inv.machine_input.list()) do if v.count>0 then empty=false end end
+      if inv.machine_input then for _,v in pairs(inv.machine_input.list()) do if v.count>0 then empty=false end end end
       for _,c in ipairs(m.connections or {}) do
         if c.direction=="in" then
           local d=io(c.destination)
@@ -486,7 +522,7 @@ function M.new(config,states,io,save,clock)
       for _,other in ipairs(config.machines) do
         local s=states[other.id]
         if other.id~=m.id and s and (s.staging or s.batch or s.pending) then
-          if port(other.ports.input).name==p.input.name then self.status[m.id]="WAITING BATCH"; return end
+          if p.input and other.ports.input and port(other.ports.input).name==p.input.name then self.status[m.id]="WAITING BATCH"; return end
           for _,a in ipairs(m.connections or {}) do if a.direction=="in" then
             for _,b in ipairs(other.connections or {}) do
               if b.direction=="in" and a.kind==b.kind and a.source==b.source then self.status[m.id]="WAITING BATCH"; return end
@@ -494,7 +530,7 @@ function M.new(config,states,io,save,clock)
           end end
         end
       end
-      if next(inv.machine_input.list()) or next(inv.machine_output.list()) or not M.extraEmpty(m,io) then self.status[m.id]="DRAIN WORK PORTS"; return end
+      if (inv.machine_input and next(inv.machine_input.list())) or (inv.machine_output and next(inv.machine_output.list())) or not M.extraEmpty(m,io) then self.status[m.id]="DRAIN WORK PORTS"; return end
       local entries={}
       local function snapshot(kind,src,dst,filter,srcSlot,dstSlot)
         local a,b=io(src),io(dst)
@@ -514,7 +550,7 @@ function M.new(config,states,io,save,clock)
         end
         return found
       end
-      if not snapshot("item",p.input.name,p.machine_input.name,nil,p.input.slot,p.machine_input.slot) then self.status[m.id]="WAITING BATCH"; return end
+      if p.input and not snapshot("item",p.input.name,p.machine_input.name,m.primary_filter,p.input.slot,p.machine_input.slot) then self.status[m.id]="WAITING BATCH"; return end
       for _,c in ipairs(m.connections or {}) do
         if c.direction=="in" and not snapshot(c.kind,c.source,c.destination,c.resource) then self.status[m.id]="WAITING "..c.kind:upper(); return end
       end
@@ -587,7 +623,9 @@ function M.new(config,states,io,save,clock)
     if st.pending and not recoverBatch(st) and not recoverSingle(st) then st.phase="fault"; st.error="Uncertain transfer; inspect ports"; self.status[m.id]="FAULT"; return end
     if st.phase=="fault" then return end
     local p={} local inv={}
-    for _,r in ipairs(roles) do p[r]=port(m.ports[r]); inv[r]=io(p[r].name); if not inv[r] then self.status[m.id]="OFFLINE "..r; return end end
+    for _,r in ipairs(roles) do
+      p[r]=port(m.ports[r]); if p[r] then inv[r]=io(p[r].name); if not inv[r] then self.status[m.id]="OFFLINE "..r; return end end
+    end
     if m.mode=="batch" then return batchStep(m,st,p,inv,load) end
     local same=p.machine_input.name==p.machine_output.name and (not p.machine_input.slot or not p.machine_output.slot or p.machine_input.slot==p.machine_output.slot)
     local work=slots(inv.machine_output)
@@ -627,7 +665,7 @@ function M.new(config,states,io,save,clock)
         local os=states[other.id]
         if other.id~=m.id and os and (os.staging or os.batch or os.pending) then
           local op=port(other.ports.input)
-          if op.name==p.input.name then self.status[m.id]="WAITING STAGED BATCH"; return end
+          if op and op.name==p.input.name then self.status[m.id]="WAITING STAGED BATCH"; return end
           for _,a in ipairs(m.connections or {}) do
             if a.direction=="in" then for _,b in ipairs(other.connections or {}) do
               if b.direction=="in" and a.kind==b.kind and a.source==b.source then self.status[m.id]="WAITING STAGED BATCH"; return end

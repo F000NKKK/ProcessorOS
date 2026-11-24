@@ -16,8 +16,8 @@ function M.collect(cfg,states,io,clock)
     local ok,p=pcall(io,name)
     if not ok or not p then d.issues[1]="OFFLINE"; return d end
     d.online=true
-    local read=kind=="fluid" and p.tanks or p.list
-    local push=kind=="fluid" and p.pushFluid or p.pushItems
+    local read,push
+    if kind=="fluid" then read,push=p.tanks,p.pushFluid else read,push=p.list,p.pushItems end
     d.canRead=type(read)=="function"; d.canPush=type(push)=="function"
     local rows,err=safe(read)
     if not rows then d.issues[#d.issues+1]="Read: "..tostring(err)

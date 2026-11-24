@@ -182,8 +182,7 @@ function M.new(reg,net,config,states,store,core,clock,drained,registry)
         for _,m in ipairs(w.draft) do
           core.compileBindings(w.raw,m.bindings,m)
           if not m.id then
-            local function name(p) return type(p)=="table" and p.name or p end
-            m.id=name(m.ports.machine_input).."|"..name(m.ports.machine_output)
+            m.id=core.machineKey(m)
           end
           for _,b in ipairs(m.bindings) do
             local found=false

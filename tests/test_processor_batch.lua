@@ -56,3 +56,20 @@ basin.items={}; basinFluid.amount=0; productFluid.fluid="create:chocolate"; prod
 e.tick(); assert(outputFluid.amount==1000 and st.mix.fluidCompleted==1000)
 now=14; e.tick(); assert(not st.mix.batch)
 print("mixed item/fluid batch and liquid result passed")
+
+-- A liquid-only Mixer needs no dummy item output or input.
+local cfg2={enabled=true,machines={{id="fluidmix",mode="batch",ports={},connections={
+ {kind="fluid",direction="in",source="milk_0",destination="basin_fluid_0"},
+ {kind="fluid",direction="out",source="product_fluid_0",destination="output_fluid_0"}
+}}}}
+core.syncTopology(cfg2)
+local m=cfg2.machines[1]; core.compileBindings(cfg2.raw_ports,m.bindings,m); core.validate(cfg2)
+assert(not m.ports.input and not m.ports.output and core.machineKey(m)=="basin_fluid_0|product_fluid_0")
+milk.amount=1000; basinFluid.amount=0; productFluid.amount=0; outputFluid.amount=0
+st={}; now=20; e=core.new(cfg2,st,function(n) return inv[n] end,function() return true end,function() return now end)
+e.tick(); now=21; e.tick(); e.tick()
+assert(st.fluidmix.batch.phase=="processing" and basinFluid.amount==1000)
+basinFluid.amount=0; productFluid.fluid="create:chocolate"; productFluid.amount=500
+now=22; e.tick(); assert(outputFluid.amount==500 and st.fluidmix.fluidCompleted==500)
+now=25; e.tick(); assert(not st.fluidmix.batch)
+print("liquid-only topology and batch passed")

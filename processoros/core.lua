@@ -195,6 +195,10 @@ function M.validate(config)
       used[work]={id=m.id,label=label,role="extra "..j}
       external[raw]={label=label,role="extra "..j}
     end
+    if m.mode=="batch" then
+      assert(port(m.ports.machine_input).name~=port(m.ports.machine_output).name,"Batch mode requires separate product buffer")
+      for _,c in ipairs(m.connections or {}) do assert(c.direction~="in" or not c.reusable,"Batch mode does not support tools") end
+    end
     assert(not m.result_filter or (type(m.result_filter)=="string" and m.result_filter:match("^[^:]+:[^:]+$")),"Invalid result filter")
     assert(not m.primary_filter or (type(m.primary_filter)=="string" and m.primary_filter:match("^[^:]+:[^:]+$")),"Invalid primary filter")
     assert(#(m.connections or {})==0 or (m.batch_size or 1)==1,"Additional resources require batch size 1")
@@ -379,13 +383,159 @@ function M.new(config,states,io,save,clock)
       end
     end
   end
+  local function batchStep(m,st,p,inv,load)
+    local function fault(message) st.phase="fault"; st.error=message; persist() end
+    local function rows(per,kind)
+      return kind=="fluid" and per.tanks() or per.list()
+    end
+    local function amountAt(per,kind,name,slot)
+      local n=0
+      for i,v in pairs(rows(per,kind)) do
+        if (not slot or i==slot) and (kind=="fluid" and v.name or key(v))==name then n=n+(kind=="fluid" and v.amount or v.count) end
+      end
+      return n
+    end
+    local function move(entry,limit)
+      local a,b=io(entry.source),io(entry.destination)
+      if not a or not b then return nil end
+      local pending={batch=true,entry=entry,limit=limit,beforeSource=amountAt(a,entry.kind,entry.identity,entry.slot),beforeDest=amountAt(b,entry.kind,entry.identity,entry.destSlot)}
+      st.pending=pending; persist()
+      local n
+      if entry.kind=="fluid" then n=a.pushFluid(entry.destination,limit,entry.identity)
+      else n=a.pushItems(entry.destination,entry.slot,limit,entry.destSlot) end
+      assert(type(n)=="number" and n>=0 and n<=limit,"Invalid batch transfer result")
+      return n
+    end
+    local job=st.batch
+    if not load then
+      if not job or job.phase~="processing" then return end
+      local outputs,why=resolve(m,p.input,nil,false)
+      if not outputs then self.status[m.id]=why; return end
+      local routes={{kind="item",source=p.machine_output.name,destination=p.output.name,sourceSlot=p.machine_output.slot,destSlot=p.output.slot}}
+      for _,c in ipairs(outputs) do routes[#routes+1]=c end
+      local blocked=false
+      for _,r in ipairs(routes) do
+        local a,b=io(r.source),io(r.destination)
+        if not a or not b then self.status[m.id]="OFFLINE OUTPUT"; return end
+        for slot,v in pairs(rows(a,r.kind)) do
+          local count=r.kind=="fluid" and v.amount or v.count
+          if count and count>0 and (not r.resource or v.name==r.resource) and (not r.sourceSlot or r.sourceSlot==slot) then
+            local entry={kind=r.kind,source=r.source,destination=r.destination,identity=r.kind=="fluid" and v.name or key(v),slot=r.kind=="item" and slot or nil,destSlot=r.destSlot,output=true}
+            local n=move(entry,count)
+            if not n then return end
+            job.produced=(job.produced or 0)+n
+            if r.kind=="item" then st.completed=st.completed+n else st.fluidCompleted=(st.fluidCompleted or 0)+n end
+            st.pending=nil; job.quiet=nil; persist()
+            if n<count then blocked=true end
+          end
+        end
+      end
+      local empty=true
+      for _,v in pairs(inv.machine_input.list()) do if v.count>0 then empty=false end end
+      for _,c in ipairs(m.connections or {}) do
+        if c.direction=="in" then
+          local d=io(c.destination)
+          if not d then empty=false else
+            for _,v in pairs(rows(d,c.kind)) do if (c.kind=="fluid" and v.amount or v.count)>0 then empty=false end end
+          end
+        end
+      end
+      if blocked then self.status[m.id]="OUTPUT BLOCKED"; return end
+      if empty and (job.produced or 0)>0 then
+        job.quiet=job.quiet or clock()
+        if clock()-job.quiet>=2 then st.batch=nil; st.active=nil; st.phase="idle"; st.started=nil; persist() end
+      else job.quiet=nil end
+      if st.batch then
+        self.status[m.id]="PROCESSING BATCH"
+        if clock()-job.started>(m.timeout or 300) then fault("Batch timeout; inspect Basin and product buffers") end
+      end
+      return
+    end
+    if job and job.phase=="processing" then return end
+    if not job then
+      if not config.enabled or config.feed_hold or m.enabled==false or (config.role=="slave" and (not config.master_id or not m.number)) then return end
+      -- Do not take a second batch until the previous batch has been isolated.
+      for _,other in ipairs(config.machines) do
+        local s=states[other.id]
+        if other.id~=m.id and s and (s.staging or s.batch) and port(other.ports.input).name==p.input.name then self.status[m.id]="WAITING BATCH"; return end
+      end
+      if next(inv.machine_input.list()) or next(inv.machine_output.list()) or not M.extraEmpty(m,io) then self.status[m.id]="DRAIN WORK PORTS"; return end
+      local entries={}
+      local function snapshot(kind,src,dst,filter,srcSlot,dstSlot)
+        local a,b=io(src),io(dst)
+        if not a or not b then return false end
+        local found=false
+        for slot,v in pairs(rows(a,kind)) do
+          local n=kind=="fluid" and v.amount or v.count
+          if n and n>0 and (not filter or v.name==filter) and (not srcSlot or slot==srcSlot) then
+            entries[#entries+1]={kind=kind,source=src,destination=dst,identity=kind=="fluid" and v.name or key(v),slot=kind=="item" and slot or nil,destSlot=dstSlot,remaining=n}
+            found=true
+          end
+        end
+        return found
+      end
+      if not snapshot("item",p.input.name,p.machine_input.name,nil,p.input.slot,p.machine_input.slot) then self.status[m.id]="WAITING BATCH"; return end
+      for _,c in ipairs(m.connections or {}) do
+        if c.direction=="in" and not snapshot(c.kind,c.source,c.destination,c.resource) then self.status[m.id]="WAITING "..c.kind:upper(); return end
+      end
+      -- Stable observation avoids taking immediately arriving partial deliveries.
+      local signature={}
+      for _,e in ipairs(entries) do signature[#signature+1]=e.source.."|"..tostring(e.slot).."|"..e.identity.."|"..e.remaining end
+      table.sort(signature); signature=table.concat(signature,";")
+      if st.batchSignature~=signature then st.batchSignature=signature; st.batchSeen=clock(); return end
+      if clock()-(st.batchSeen or clock())<1 then return end
+      job={phase="loading",entries=entries,index=1,started=clock(),produced=0}
+      st.batch=job; st.active=true; st.phase="processing"; persist()
+    end
+    if not config.enabled and not config.feed_hold then self.status[m.id]="BATCH PAUSED"; return end
+    local entry=job.entries[job.index]
+    if not entry then job.phase="processing"; job.started=clock(); persist(); return end
+    local a=io(entry.source)
+    if not a then self.status[m.id]="OFFLINE INPUT"; return end
+    if amountAt(a,entry.kind,entry.identity,entry.slot)<entry.remaining then fault("Batch source changed during loading"); return end
+    local n=move(entry,entry.remaining)
+    if not n then self.status[m.id]="OFFLINE BATCH"; return end
+    entry.remaining=entry.remaining-n
+    if entry.remaining==0 then job.index=job.index+1 end
+    st.pending=nil; persist()
+    self.status[m.id]=n>0 and "LOADING BATCH" or "INPUT BLOCKED"
+    if clock()-job.started>(m.timeout or 300) then fault("Batch loading timeout") end
+  end
+  local function recoverBatch(st)
+    local q=st.pending
+    if not q or not q.batch or not st.batch then return false end
+    local e=q.entry; local a,b=io(e.source),io(e.destination)
+    if not a or not b then return false end
+    local function amount(p,slot)
+      local n=0
+      for i,v in pairs(e.kind=="fluid" and p.tanks() or p.list()) do
+        if (not slot or i==slot) and (e.kind=="fluid" and v.name or key(v))==e.identity then n=n+(e.kind=="fluid" and v.amount or v.count) end
+      end
+      return n
+    end
+    local moved=q.beforeSource-amount(a,e.slot)
+    local added=amount(b,e.destSlot)-q.beforeDest
+    if moved~=added or moved<0 or moved>q.limit then return false end
+    if e.output then
+      st.batch.produced=(st.batch.produced or 0)+moved
+      if e.kind=="item" then st.completed=st.completed+moved else st.fluidCompleted=(st.fluidCompleted or 0)+moved end
+      st.batch.quiet=nil
+    else
+      local current=st.batch.entries[st.batch.index]
+      if not current or current.identity~=e.identity or current.source~=e.source then return false end
+      current.remaining=current.remaining-moved
+      if current.remaining==0 then st.batch.index=st.batch.index+1 end
+    end
+    st.pending=nil; st.phase="processing"; st.error=nil; persist(); return true
+  end
   local function step(m,load)
     local st=states[m.id] or {phase="idle",completed=0}
     states[m.id]=st
-    if st.pending then st.phase="fault"; st.error="Uncertain transfer; inspect ports"; self.status[m.id]="FAULT"; return end
+    if st.pending and not recoverBatch(st) then st.phase="fault"; st.error="Uncertain transfer; inspect ports"; self.status[m.id]="FAULT"; return end
     if st.phase=="fault" then return end
     local p={} local inv={}
     for _,r in ipairs(roles) do p[r]=port(m.ports[r]); inv[r]=io(p[r].name); if not inv[r] then self.status[m.id]="OFFLINE "..r; return end end
+    if m.mode=="batch" then return batchStep(m,st,p,inv,load) end
     local same=p.machine_input.name==p.machine_output.name and (not p.machine_input.slot or not p.machine_output.slot or p.machine_input.slot==p.machine_output.slot)
     local work=slots(inv.machine_output)
     if not load then

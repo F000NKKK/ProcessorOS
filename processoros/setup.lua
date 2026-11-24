@@ -222,6 +222,7 @@ local function addMachine(index)
     print("I = + Add input  O = + Add output")
     print("D = remove  E = replace  R = optional filter")
     print("F = filters  T = timeout  N = feed")
+    print("M = mode: "..(m.mode or "single"))
     print("S = accept  B = discard")
     if err then printError(err) end
     local v=ask():lower(); err=nil
@@ -242,6 +243,7 @@ local function addMachine(index)
       title("RECIPE FILTERS")
       local a=ask("Primary ID (blank = any)> "); local b=ask("Result ID (blank = any)> ")
       m.primary_filter=a~="" and a or nil; m.result_filter=b~="" and b or nil
+    elseif v=="m" then m.mode=m.mode=="batch" and "single" or "batch"
     elseif v=="t" then local t=tonumber(ask("Timeout seconds> ")); if t then m.timeout=t end
     elseif v=="n" then m.enabled=m.enabled==false
     elseif v=="s" then

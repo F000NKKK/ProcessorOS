@@ -37,6 +37,7 @@ end
 function M.save(name, value)
   M.init()
   if name=="config" then
+    if value.topology_version==1 then dofile("/processoros/core.lua").syncTopology(value) end
     local persisted={} for k,v in pairs(value) do if k~="feed_hold" then persisted[k]=v end end
     value=persisted
   end
@@ -66,6 +67,10 @@ function M.loadConfig()
     if not M.load("config_pre_v2",nil) then assert(M.save("config_pre_v2",cfg)) end
     core.migrate(cfg); core.validate(cfg); assert(M.save("config",cfg))
   else core.migrate(cfg) end
+  if cfg.topology_version~=1 then
+    if not M.load("config_pre_ports",nil) then assert(M.save("config_pre_ports",cfg)) end
+    core.syncTopology(cfg); cfg.topology_version=1; assert(M.save("config",cfg))
+  else core.syncTopology(cfg) end
   return cfg
 end
 return M

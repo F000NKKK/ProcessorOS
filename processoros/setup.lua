@@ -76,189 +76,184 @@ local function choose(role,label,default)
     end
   end
 end
-local machines={}
-for i,m in ipairs(cfg.machines) do machines[i]=m end
-local function pname(p) return type(p)=="table" and p.name or p end
-local mainInput=cfg.main_input
-local mainOutput=cfg.main_output
-if #machines>0 then
-  mainInput=mainInput or pname(machines[1].ports.input)
-  mainOutput=mainOutput or pname(machines[1].ports.output)
+local machines=cfg.machines
+local raw=cfg.raw_ports or {}
+local function clone(x)
+  if type(x)~="table" then return x end
+  local t={} for k,v in pairs(x) do t[k]=clone(v) end return t
 end
-local function common()
-  local a=choose("input","Select Main Input - raw material storage",mainInput)
-  if not a then return false end
-  local b=choose("output","Select Main Output - finished product destination",mainOutput)
-  if not b then return false end
-  if a==b then printError("Main Input must differ from Main Output"); read(); return false end
-  local draft={}
-  for i,m in ipairs(machines) do
-    local copy={} for k,v in pairs(m) do copy[k]=v end
-    copy.ports={} for k,v in pairs(m.ports) do copy.ports[k]=v end
-    copy.ports.input=a; copy.ports.output=b; draft[i]=copy
-  end
-  local ok,err=pcall(core.validate,{machines=draft})
-  if not ok then printError(tostring(err)); read(); return false end
-  mainInput=a; mainOutput=b; machines=draft
-  return true
-end
-local function chooseResource(kind,label)
+machines=clone(machines); raw=clone(raw)
+local function ask(s) write(s or "> "); return read() end
+local function chooseTyped(kind,label,dir,working)
+  if kind=="item" then return choose(working and (dir=="in" and "machine_input" or "machine_output") or (dir=="in" and "input" or "output"),label) end
   while true do
-    title(label)
-    local list={}
+    title(label); local list={}
     for _,n in ipairs(peripheral.getNames()) do
       local p=peripheral.wrap(n)
-      if n:match("_%d+$") and p and (kind=="fluid" and p.tanks and p.pushFluid or kind=="item" and p.list and p.pushItems) then list[#list+1]=n end
+      if n:match("_%d+$") and p and p.tanks and p.pushFluid then list[#list+1]=n end
     end
-    table.sort(list)
-    for i,n in ipairs(list) do print(i..": "..n) end
-    print("B = cancel"); write("> "); local v=read()
-    if v:lower()=="b" then return end
-    if list[tonumber(v) or 0] then return list[tonumber(v)] end
+    table.sort(list); for i,n in ipairs(list) do print(i..": "..n) end
+    if #list==0 then print("No compatible fluid peripherals") end
+    print("B = back")
+    local v=ask():lower(); if v=="b" then return end
+    if list[tonumber(v)] then return list[tonumber(v)] end
   end
 end
-local function editConnections(machine)
-  local list={} for i,c in ipairs(machine.connections or {}) do list[i]=c end
+local function spec(p) if type(p)=="string" then return {name=p} end return p end
+local function rawEdit()
+  local draft=clone(raw)
   while true do
-    title("ADDITIONAL RESOURCE PORTS")
-    for i,c in ipairs(list) do print(i..": "..c.direction.." "..c.kind.." "..c.resource.." x"..c.amount..(c.reusable and " TOOL" or "")) end
-    print("A = add   D = remove")
-    print("S = accept   B = discard")
-    write("> "); local v=read():lower()
+    title("GROUP / RAW PORTS")
+    for i,r in ipairs(draft) do print(i..". "..r.direction:upper().." "..r.kind:upper().." "..r.name) end
+    print("I = + Add input   O = + Add output")
+    print("D = remove   S = accept   B = back")
+    local v=ask():lower()
     if v=="b" then return
-    elseif v=="s" then machine.connections=list; if #list>0 then machine.batch_size=1 end; return
-    elseif v=="d" then write("Connection number> "); local n=tonumber(read()); if n and list[n] then table.remove(list,n) end
-    elseif v=="a" then
-      title("Resource type: I = item, F = fluid")
-      write("> "); local k=read():lower(); local kind=k=="i" and "item" or k=="f" and "fluid"
+    elseif v=="s" then raw=draft; return
+    elseif v=="d" then
+      local i=tonumber(ask("Port number> "))
+      if draft[i] then
+        local used=false
+        for _,m in ipairs(machines) do for _,b in ipairs(m.bindings or {}) do if b.raw==draft[i].id then used=true end end end
+        if used then printError("Unbind this port from machines first"); read() else table.remove(draft,i) end
+      end
+    elseif v=="i" or v=="o" then
+      local dir=v=="i" and "in" or "out"
+      title("Raw "..dir..": I = item, F = fluid")
+      local k=ask():lower(); local kind=k=="i" and "item" or k=="f" and "fluid"
       if kind then
-        title("Direction: I = input, O = output")
-        write("> "); local d=read():lower(); local dir=d=="i" and "in" or d=="o" and "out"
-        if dir then
-          local source=chooseResource(kind,dir=="in" and "Select Raw Input" or "Select Machine Output")
-          local destination=source and chooseResource(kind,dir=="in" and "Select Machine Input" or "Select Raw Output")
-          if destination then
-            title("Resource ID (namespace:name)"); write("> "); local resource=read()
-            title(kind=="fluid" and "Amount per operation (mB)" or "Amount per operation (items)")
-            write("> "); local amount=tonumber(read())
-            if resource:match("^[^:]+:[^:]+$") and amount and amount>=1 and amount%1==0 then
-              local reusable=false
-              if kind=="item" and dir=="in" and amount==1 then
-                title("C = consumable, T = reusable tool"); write("> "); reusable=read():lower()=="t"
-              end
-              list[#list+1]={kind=kind,direction=dir,source=source,destination=destination,resource=resource,amount=amount,reusable=reusable}
-            end
-          end
+        local p=chooseTyped(kind,"Select raw "..dir,dir,false)
+        if p then
+          p=spec(p)
+          local id=kind.."|"..dir.."|"..p.name.."|"..tostring(p.slot or "")
+          local exists=false for _,r in ipairs(draft) do if r.id==id then exists=true end end
+          if not exists then draft[#draft+1]={id=id,kind=kind,direction=dir,name=p.name,slot=p.slot} end
         end
       end
     end
   end
 end
+local function editRecipe(b)
+  title("RECIPE / "..b.name)
+  print("Resource: "..(b.resource or "UNSET"))
+  local id=ask("Resource ID (Enter = keep)> ")
+  if id~="" then if not id:match("^[^:]+:[^:]+$") then return false end; b.resource=id end
+  local amount=ask("Amount "..(b.kind=="fluid" and "mB" or "items").." (Enter = keep)> ")
+  if amount~="" then b.amount=tonumber(amount) end
+  if not b.resource or not b.amount or b.amount<1 or b.amount%1~=0 then return false end
+  if b.kind=="item" and b.direction=="in" and b.amount==1 then
+    local v=ask("C = consumable, T = tool, Enter = keep> "):lower()
+    if v=="c" then b.reusable=false elseif v=="t" then b.reusable=true end
+  else b.reusable=false end
+  return true
+end
 local function addMachine(index)
-  local original=index and machines[index]
-  if not original and #machines>=32 then print("Maximum 32 machines"); read(); return false end
-  local label="Machine "..(original and (original.number or index) or (#machines+1))
-  local draftMachine={ports={},enabled=true,batch_size=1,timeout=300}
-  if original then
-    for k,v in pairs(original) do if k~="ports" then draftMachine[k]=v end end
-    for k,v in pairs(original.ports) do draftMachine.ports[k]=v end
-  else
-    local a=choose("machine_input","Select "..label.." Input")
-    if not a then return false end
-    local b=choose("machine_output","Select "..label.." Output",a)
-    if not b then return false end
-    draftMachine.ports={input=mainInput,output=mainOutput,machine_input=a,machine_output=b}
+  if not index and #machines>=32 then return end
+  local m=index and clone(machines[index]) or {enabled=true,batch_size=1,timeout=300,mode="single",bindings={}}
+  local bindings=m.bindings or {}
+  local function find(id) for i,b in ipairs(bindings) do if b.raw==id then return i,b end end end
+  local function bind(r)
+    local p=chooseTyped(r.kind,"Select machine "..r.direction.." for "..r.name,r.direction,true)
+    if not p then return end
+    p=spec(p)
+    local i,old=find(r.id)
+    local primary=old and old.primary
+    if not old and r.kind=="item" then
+      primary=true
+      for _,b in ipairs(bindings) do if b.primary and b.direction==r.direction then primary=false end end
+    end
+    local b=old or {raw=r.id,kind=r.kind,direction=r.direction,primary=primary}
+    b.name=p.name; b.slot=p.slot
+    if not i then bindings[#bindings+1]=b end
   end
-  local labels={"Main Input","Machine Input","Machine Output","Main Output"}
-  local errorText
+  local function add(dir)
+    title("Choose raw "..dir.." to connect")
+    local list={}
+    for _,r in ipairs(raw) do if r.direction==dir then list[#list+1]=r; print(#list..". "..r.kind.." "..r.name) end end
+    local i=tonumber(ask("Port number (B = back)> "))
+    if list[i] then bind(list[i]) end
+  end
+  if not index then
+    -- First-time registration walks through group ports immediately.
+    for _,r in ipairs(raw) do
+      title("CONNECT / "..r.kind:upper().." "..r.name)
+      print("Enter = connect, K = skip")
+      if ask():lower()~="k" then bind(r) end
+    end
+  end
+  local err
   while true do
-    title(label.." / EDIT")
-    for i,r in ipairs(reg.roles) do
-      local p=draftMachine.ports[r]
-      print(i..". "..labels[i]..": "..tostring(pname(p))..(type(p)=="table" and p.slot and (":"..p.slot) or ""))
+    title("MACHINE "..tostring(m.number or "NEW").." / PORTS")
+    for i,b in ipairs(bindings) do
+      print(i..". "..b.direction:upper().." "..b.kind:upper().." "..b.name..(b.primary and " [MAIN]" or ""))
     end
-    print("5. Feed: "..(draftMachine.enabled~=false and "ON" or "OFF"))
-    print("6. Batch: "..(draftMachine.batch_size or 1))
-    print("7. Timeout: "..(draftMachine.timeout or 300).."s")
-    print("8. Extra ports: "..#(draftMachine.connections or {}))
-    print("9. Primary filter: "..(draftMachine.primary_filter or "ANY"))
-    print("R. Result filter: "..(draftMachine.result_filter or "ANY"))
-    print("S = accept   B = discard")
-    if errorText then printError(errorText) end
-    write("> "); local v=read():lower(); errorText=nil
-    local r=reg.roles[tonumber(v) or 0]
-    if v=="b" then return false
-    elseif r then
-      local p=choose(r,"Select "..label.." "..labels[tonumber(v)],draftMachine.ports[r])
-      if p then draftMachine.ports[r]=p end
-    elseif v=="8" then editConnections(draftMachine)
+    print("I = + Add input  O = + Add output")
+    print("D = remove  E = rebind  R = recipe")
+    print("F = filters  T = timeout  N = feed")
+    print("S = accept  B = discard")
+    if err then printError(err) end
+    local v=ask():lower(); err=nil
+    if v=="b" then return
+    elseif v=="i" then add("in")
+    elseif v=="o" then add("out")
+    elseif v=="d" then local i=tonumber(ask("Binding number> ")); if bindings[i] then table.remove(bindings,i) end
+    elseif v=="e" then
+      local i=tonumber(ask("Binding number> "))
+      if bindings[i] then for _,r in ipairs(raw) do if r.id==bindings[i].raw then bind(r); break end end end
     elseif v=="r" then
-      title("Expected result ID (blank = any)"); write("> "); local id=read()
-      if id=="" then draftMachine.result_filter=nil elseif id:match("^[^:]+:[^:]+$") then draftMachine.result_filter=id else errorText="Invalid item ID" end
-    elseif v=="9" then
-      title("Primary item ID (blank = any)"); write("> "); local id=read()
-      if id=="" then draftMachine.primary_filter=nil elseif id:match("^[^:]+:[^:]+$") then draftMachine.primary_filter=id else errorText="Invalid item ID" end
-    elseif v=="5" then draftMachine.enabled=draftMachine.enabled==false
-    elseif v=="6" or v=="7" then
-      title(v=="6" and "Batch size (1-64)" or "Timeout in seconds (1-86400)")
-      write("> "); local n=tonumber(read())
-      if n and n%1==0 and n>=1 and n<=(v=="6" and 64 or 86400) then
-        if v=="6" then draftMachine.batch_size=n else draftMachine.timeout=n end
-      else errorText="Invalid value" end
+      title("RECIPE RESOURCES (separate from ports)")
+      for i,b in ipairs(bindings) do if not b.primary then print(i..". "..b.name.." "..(b.resource or "UNSET").." x"..tostring(b.amount or "?")) end end
+      local i=tonumber(ask("Binding number> ")); if bindings[i] and not bindings[i].primary then
+        local b=clone(bindings[i]); if editRecipe(b) then bindings[i]=b else err="Invalid resource or amount" end
+      end
+    elseif v=="f" then
+      title("RECIPE FILTERS")
+      local a=ask("Primary ID (blank = any)> "); local b=ask("Result ID (blank = any)> ")
+      m.primary_filter=a~="" and a or nil; m.result_filter=b~="" and b or nil
+    elseif v=="t" then local t=tonumber(ask("Timeout seconds> ")); if t then m.timeout=t end
+    elseif v=="n" then m.enabled=m.enabled==false
     elseif v=="s" then
-      if not original then draftMachine.id=pname(draftMachine.ports.machine_input).."|"..pname(draftMachine.ports.machine_output) end
-      local draft={} for i,m in ipairs(machines) do draft[i]=m end
-      draft[index or (#draft+1)]=draftMachine
-      local ok,err=pcall(core.validate,{machines=draft})
-      if ok then machines=draft; return true end
-      errorText=tostring(err)
+      local ok,e=pcall(function()
+        for _,b in ipairs(bindings) do if not b.primary and (not b.resource or not b.amount) then assert(editRecipe(b),"Recipe incomplete") end end
+        core.compileBindings(raw,bindings,m)
+        if not m.id then m.id=spec(m.ports.machine_input).name.."|"..spec(m.ports.machine_output).name end
+        local draft=clone(machines); draft[index or #draft+1]=m; core.validate({machines=draft})
+        machines=draft
+      end)
+      if ok then return end
+      err=tostring(e)
     end
   end
 end
-if not mainInput or not mainOutput then
-  if not common() then return end
-  title("How many machines to add?")
-  print("Enter 1-32, or B to cancel.")
-  write("> "); local n=tonumber(read())
-  if not n or n<1 or n>32-#machines or n%1~=0 then return end
-  for i=1,n do if not addMachine() then break end end
-end
+if #raw==0 then rawEdit() end
 while true do
-  title("CONFIGURATION REVIEW")
-  print("Group: "..cfg.name)
-  print("Main Input: "..tostring(mainInput or "unset"))
-  print("Main Output: "..tostring(mainOutput or "unset"))
-  print("Machines: "..#machines)
-  local _,height=term.getSize()
-  for i=1,math.min(#machines,math.max(0,height-14)) do local m=machines[i]; print(i..": "..pname(m.ports.machine_input)) end
-  print("A = add   I = common ports")
-  print("E = edit existing machine")
-  print("G = rename group")
-  print("S = save and synchronize")
-  print("Q = discard changes")
-  write("> "); local v=read():lower()
-  if v=="q" then print("Changes discarded"); return
-  elseif v=="a" then if mainInput and mainOutput or common() then addMachine() end
-  elseif v=="i" then common()
-  elseif v=="e" then
-    title("Select existing machine to edit")
-    for i,m in ipairs(machines) do print(i..": "..(m.number or "draft").." / "..pname(m.ports.machine_input)) end
-    write("Machine index (B to cancel)> "); local i=tonumber(read()); if i and machines[i] then addMachine(i) end
-  elseif v=="g" then title("Group name"); write("> "); local n=read(); if n:match("%S") and #n<=60 then cfg.name=n end
+  title("CONFIGURATION / "..cfg.name)
+  print("Raw ports: "..#raw.." | Machines: "..#machines)
+  for i,m in ipairs(machines) do print(i..". "..tostring(m.number or "NEW").." "..spec(m.ports.machine_input).name) end
+  print("I = group ports   A = add machine")
+  print("E = edit machine  G = rename group")
+  print("S = save   Q = discard")
+  local v=ask():lower()
+  if v=="q" then return
+  elseif v=="i" then rawEdit()
+  elseif v=="a" then addMachine()
+  elseif v=="e" then local i=tonumber(ask("Machine number in list> ")); if machines[i] then addMachine(i) end
+  elseif v=="g" then local n=ask("Group name> "); if n:match("%S") and #n<=60 then cfg.name=n end
   elseif v=="s" then
-    local ok,err=pcall(function()
-      core.validate({machines=machines})
-      local keys={}
-      for _,m in ipairs(machines) do if not m.number then keys[#keys+1]=m.id end end
-      local reply=request("allocate",keys)
-      for _,m in ipairs(machines) do if not m.number then
-        local n=reply.assigned and reply.assigned[m.id]; assert(type(n)=="number" and n>=1 and n%1==0,"Missing machine number"); m.number=n
-      end end
-      cfg.main_input=mainInput; cfg.main_output=mainOutput
-      cfg.machines=machines; cfg.master_id=master
+    local ok,e=pcall(function()
+      local draft=clone(machines)
+      for _,m in ipairs(draft) do core.compileBindings(raw,m.bindings,m) end
+      core.validate({machines=draft})
+      local keys={} for _,m in ipairs(draft) do if not m.number then keys[#keys+1]=m.id end end
+      if #keys>0 then
+        local reply=request("allocate",keys)
+        for _,m in ipairs(draft) do if not m.number then m.number=assert(reply.assigned[m.id],"Missing machine number") end end
+      end
+      cfg.raw_ports=raw; cfg.machines=draft; cfg.master_id=master
+      cfg.main_input=nil; cfg.main_output=nil; cfg.topology_version=1
       assert(store.save("config",cfg))
     end)
-    if ok then title("CONFIGURATION SAVED"); print(cfg.enabled and "Feed resumes after reboot." or "Feed remains OFF."); return end
-    printError(tostring(err)); print("Enter to retry"); read()
+    if ok then title("CONFIGURATION SAVED"); return end
+    printError(tostring(e)); read()
   end
 end

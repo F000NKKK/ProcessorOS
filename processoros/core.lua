@@ -16,6 +16,70 @@ function M.migrate(cfg)
   cfg.schema_version=2
   return changed
 end
+local function portKey(kind,dir,p)
+  p=port(p)
+  return kind.."|"..dir.."|"..p.name.."|"..tostring(p.slot or "")
+end
+function M.syncTopology(cfg)
+  local raw=cfg.raw_ports or {}
+  local byKey,byId={},{}
+  for _,p in ipairs(raw) do byKey[portKey(p.kind,p.direction,p)]=p; byId[p.id]=p end
+  local function ensure(kind,dir,p)
+    p=port(p)
+    local k=portKey(kind,dir,p)
+    if byKey[k] then return byKey[k].id end
+    local id=k
+    local r={id=id,kind=kind,direction=dir,name=p.name,slot=p.slot}
+    raw[#raw+1]=r; byKey[k]=r; byId[id]=r
+    return id
+  end
+  if cfg.main_input then ensure("item","in",cfg.main_input) end
+  if cfg.main_output then ensure("item","out",cfg.main_output) end
+  for _,m in ipairs(cfg.machines or {}) do
+    local bindings={}
+    local function bind(kind,dir,rawPort,work,primary,c)
+      local p=port(work)
+      bindings[#bindings+1]={raw=ensure(kind,dir,rawPort),kind=kind,direction=dir,name=p.name,slot=p.slot,primary=primary,resource=c and c.resource,amount=c and c.amount,reusable=c and c.reusable}
+    end
+    bind("item","in",m.ports.input,m.ports.machine_input,true)
+    bind("item","out",m.ports.output,m.ports.machine_output,true)
+    for _,c in ipairs(m.connections or {}) do
+      bind(c.kind,c.direction,c.direction=="in" and c.source or c.destination,c.direction=="in" and c.destination or c.source,false,c)
+    end
+    m.bindings=bindings
+  end
+  cfg.raw_ports=raw
+  return cfg
+end
+function M.compileBindings(raw,bindings,m)
+  local ports,connections,seen={},{},{}
+  local byId={}
+  for _,r in ipairs(raw) do
+    assert(not byId[r.id],"Duplicate raw port")
+    byId[r.id]=r
+  end
+  local function spec(p) return p.slot and {name=p.name,slot=p.slot} or p.name end
+  for _,b in ipairs(bindings) do
+    local r=assert(byId[b.raw],"Missing raw port")
+    assert(r.kind==b.kind and r.direction==b.direction,"Port type mismatch")
+    assert(not seen[b.raw],"Duplicate binding"); seen[b.raw]=true
+    if b.primary then
+      assert(b.kind=="item","Primary execution requires item")
+      local a,z=b.direction=="in" and "input" or "output",b.direction=="in" and "machine_input" or "machine_output"
+      assert(not ports[a],"Duplicate primary "..a)
+      ports[a]=spec(r); ports[z]=spec(b)
+    else
+      assert(not r.slot and not b.slot,"Slot-specific auxiliary routes not supported")
+      assert(b.resource and b.amount,"Configure recipe for "..b.name)
+      connections[#connections+1]={kind=b.kind,direction=b.direction,source=b.direction=="in" and r.name or b.name,destination=b.direction=="in" and b.name or r.name,resource=b.resource,amount=b.amount,reusable=b.reusable}
+    end
+  end
+  for _,r in ipairs(roles) do assert(ports[r],"Select primary item input and output") end
+  for _,r in ipairs(raw) do if r.kind=="fluid" and r.direction=="in" then assert(seen[r.id],"Bind fluid input "..r.name) end end
+  m.ports=ports; m.connections=connections; m.bindings=bindings
+  if #connections>0 then m.batch_size=1 end
+  return m
+end
 function M.extraEmpty(m,io,allowTools)
   for _,c in ipairs(m.connections or {}) do
     local p=io(c.direction=="out" and c.source or c.destination)

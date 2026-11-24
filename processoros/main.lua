@@ -3,6 +3,11 @@ local store=dofile("/processoros/storage.lua")
 local net=dofile("/processoros/network.lua")
 local reg=dofile("/processoros/registration.lua")
 local wizardModule=dofile("/processoros/wizard.lua")
+local dashboard=dofile("/processoros/dashboard.lua")
+local control=dofile("/processoros/control.lua")
+local hits,frame,pending,received={},0,{},{}
+local commandCounter=0
+local confirmUpdate=nil
 local wizard
 local selectedNode=1
 local queue={}
@@ -101,6 +106,7 @@ local function draw()
   renderer.setBackgroundColor(colors.black); renderer.clear()
   line(1,"PROCESSOR OS / "..(config.role or "slave"):upper()..(config.slave_number and string.format(" %03d",config.slave_number) or ""),colors.cyan)
   if wizard and wizard.remote then
+    hits={}
     local w=wizard.remote
     line(2,"REGISTER MACHINE / NODE #"..w.id,colors.cyan)
     line(3,w.phase=="place" and "Place ONE cobblestone in selected port" or w.phase=="remove" and "Remove the marker from detected port" or tostring(w.phase),colors.yellow)
@@ -112,10 +118,20 @@ local function draw()
     line(14,"SAVE MACHINE",colors.lime); line(16,"CANCEL / BACK",colors.red)
     renderer.flush(); return
   end
-  if config.role=="master" then
+  if config.role=="master" and h>=16 and w>=35 then
     local ids=nodeIds(nodes); selectedNode=math.max(1,math.min(selectedNode,#ids))
-    local id=ids[selectedNode]
-    line(4,id and ("< SELECT: "..nodes[id].name.." #"..id.." >") or "Waiting for Slaves",colors.cyan)
+    local list={}
+    for _,id in ipairs(ids) do
+      local n=nodes[id]
+      list[#list+1]={id=id,name=n.name,machines=n.machines,enabled=n.enabled,online=clock()-n.seen<=5}
+    end
+    frame=frame+1
+    hits,page=dashboard.draw(renderer,{nodes=list,selected=list[selectedNode],frame=frame,page=page,notice=notice})
+    renderer.flush(function() sleep(0) end); return
+  end
+  if config.role=="master" then
+    local ids=nodeIds(nodes); selectedNode=math.max(1,math.min(selectedNode,#ids)); local id=ids[selectedNode]
+    line(4,id and ("< SELECT: "..nodes[id].name.." >") or "Waiting for Slaves",colors.cyan)
     line(5,"REGISTER MACHINE",colors.lime)
   end
   line(2,(config.role=="slave" and not registered and "SETUP REQUIRED" or (config.enabled and "PAUSE FEED" or "START FEED")).." | modems "..netCount,colors.lime)
@@ -142,14 +158,41 @@ local function drained()
 end
 wizard=wizardModule.new(reg,net,config,states,store,core,clock,drained,registry)
 local drainSince
+local function sendControl(id,action,enabled)
+  commandCounter=commandCounter+1
+  local token=tostring(os.getComputerID())..":"..os.epoch("utc")..":"..commandCounter
+  local msg={group=config.network_group or "factory",token=token,action=action,enabled=enabled}
+  pending[token]={id=id,at=clock()}
+  local ok,sent=pcall(rednet.send,id,msg,control.protocol)
+  if not ok or not sent then pending[token]=nil; notice="Command not sent" else notice="Command sent; awaiting ACK" end
+end
 local function work()
   while true do
     while #queue>0 do
       local q=table.remove(queue,1)
-      local ok,res=pcall(wizard.receive,q[1],q[2],q[3])
+      local ok,res=pcall(function()
+        if q[3]~=control.protocol then return wizard.receive(q[1],q[2],q[3]) end
+        local sender,msg=q[1],q[2]
+        if config.role=="master" then
+          if type(msg)=="table" and msg.kind=="ack" and msg.group==(config.network_group or "factory") and type(msg.token)=="string" then
+            local p=pending[msg.token]
+            if p and p.id==sender then pending[msg.token]=nil; notice=(msg.ok and "ACK: " or "REJECTED: ")..tostring(msg.message) end
+          end
+        elseif control.authorized(config,sender,msg) then
+          local cached=received[msg.token]
+          if not cached then
+            local accepted,message,action=control.apply(config,msg,wizard.localSession~=nil or updateRequested or requestedExit~=nil,store.save)
+            cached={kind="ack",group=config.network_group or "factory",token=msg.token,ok=accepted,message=message}
+            received[msg.token]=cached
+            if action=="update" then updateRequested=true; drainSince=nil end
+          end
+          rednet.send(sender,cached,control.protocol)
+        end
+      end)
       if not ok then notice=tostring(res) end
       if ok and res=="reload" then exitReason="reload"; return end
     end
+    for token,p in pairs(pending) do if clock()-p.at>8 then pending[token]=nil; notice="Command ACK timeout" end end
     if wizard.localSession then wizard.tick() else engine.tick() end
     if requestedExit and not wizard.localSession then
       exitReason=requestedExit; return
@@ -200,6 +243,22 @@ local function monitorInput()
           if c>=5 and c<=8 then wizard.command("select",reg.roles[c-4])
           elseif c==14 then wizard.command("save")
           elseif c==16 then wizard.command("cancel") end
+        elseif config.role=="master" and h>=16 and w>=35 then
+          local action=dashboard.hit(hits,b,c)
+          if action then
+            local ids=nodeIds(nodes); local id=ids[selectedNode]; local n=id and nodes[id]
+            if action.kind=="node" then selectedNode=selectedNode+(b>w/2 and 1 or -1); selectedNode=math.max(1,math.min(selectedNode,#ids)); confirmUpdate=nil
+            elseif action.kind=="prev" then page=math.max(1,page-1)
+            elseif action.kind=="next" then page=page+1
+            elseif action.kind=="update_master" then requestUpdate()
+            elseif n and clock()-n.seen<=5 then
+              if action.kind=="register" then wizard.start(id)
+              elseif action.kind=="feed" then sendControl(id,"feed",not n.enabled)
+              elseif action.kind=="update_slave" then
+                if confirmUpdate==id then confirmUpdate=nil; sendControl(id,"update") else confirmUpdate=id; notice="Tap UPDATE SLAVE again to confirm" end
+              end
+            else notice="No online Slave" end
+          end
         elseif config.role=="master" and c==4 then
           selectedNode=math.max(1,selectedNode+(b>w/2 and 1 or -1))
         elseif config.role=="master" and c==5 then
@@ -254,7 +313,7 @@ local function receive()
   while true do
     local sender,msg,protocol=rednet.receive()
     if type(sender)~="number" then sleep(0.1) else
-    if protocol==wizardModule.protocol and sender~=os.getComputerID() then
+    if (protocol==wizardModule.protocol or protocol==control.protocol) and sender~=os.getComputerID() then
       if #queue<128 then queue[#queue+1]={sender,msg,protocol} end
     elseif config.role=="master" and sender~=os.getComputerID() then
       local group=config.network_group or "factory"

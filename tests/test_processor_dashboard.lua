@@ -1,0 +1,7 @@
+local d=dofile("processoros/dashboard.lua")
+assert(d.layout(120,70,6).cols==3)
+assert(d.layout(40,20,6).cols==1)
+assert(d.layout(120,70,6).pages==1)
+assert(d.hit({{x=1,y=5,w=10,action={kind="register"}}},10,5).kind=="register")
+assert(not d.hit({{x=1,y=5,w=10,action={kind="register"}}},11,5))
+print("dashboard tests passed")

@@ -23,6 +23,23 @@ local engine=core.new(config,states,io,function(s) return store.save("state",s) 
 local monitor,monitorName,screen,renderer
 local rendererModule=dofile("/processoros/renderer.lua")
 local terminal=term.current()
+local terminalDirty=true
+local requestedExit=nil
+local function terminalMenu()
+  terminal.setBackgroundColor(colors.black); terminal.setTextColor(colors.white); terminal.clear(); terminal.setCursorPos(1,1)
+  print("PROCESSOR OS / "..(config.role or "slave"):upper())
+  if config.role=="slave" then
+    print(config.slave_number and string.format("Slave %03d",config.slave_number) or "Waiting for Master")
+    print("Group: "..config.name)
+    print("Machines: "..#config.machines)
+    print("S - Configure machines")
+    print("G - Rename group")
+    print("P - Start / pause feed")
+  end
+  print("U - Update OS")
+  print("Q - Exit to shell")
+  terminalDirty=false
+end
 local function refreshMonitor(force)
   local names={}
   for _,name in ipairs(peripheral.getNames()) do
@@ -38,14 +55,14 @@ local function refreshMonitor(force)
   end
   local candidate=chosen and peripheral.wrap(chosen)
   if not candidate or not candidate.getSize then chosen=nil; candidate=nil end
-  if force or chosen~=monitorName or not renderer then
+  if force or chosen~=monitorName or (candidate and not renderer) then
     if candidate then
       local ok=pcall(candidate.setTextScale,config.monitor_scale or 0.5)
       if not ok then candidate=nil; chosen=nil end
     end
     monitor,monitorName=candidate,chosen
-    screen=monitor or terminal
-    renderer=rendererModule.create(screen)
+    screen=monitor
+    renderer=screen and rendererModule.create(screen) or nil
   end
 end
 local initialOk,initialError=pcall(refreshMonitor,true)
@@ -133,6 +150,9 @@ local function work()
       if ok and res=="reload" then exitReason="reload"; return end
     end
     if wizard.localSession then wizard.tick() else engine.tick() end
+    if requestedExit and not wizard.localSession then
+      exitReason=requestedExit; return
+    end
     if updateRequested then
       local ok,empty=pcall(drained)
       if ok and empty then
@@ -147,7 +167,7 @@ end
 local function display()
   local lastError
   while true do
-    local ok,err=pcall(function() refreshMonitor(false); draw() end)
+    local ok,err=pcall(function() refreshMonitor(false); if renderer then draw() end end)
     if not ok then
       if lastError~=tostring(err) then printError("Display: "..tostring(err)); lastError=tostring(err) end
       renderer=nil
@@ -169,6 +189,7 @@ local function requestUpdate()
   updateRequested=true; notice="Drain physical machines before update"
 end
 local function input()
+  terminalMenu()
   while true do
     local e,a,b,c=os.pullEvent()
     if e=="monitor_touch" and monitor and screen and wizard and a==monitorName and type(b)=="number" and type(c)=="number" then
@@ -188,7 +209,24 @@ local function input()
     elseif e=="peripheral" or e=="peripheral_detach" or e=="monitor_resize" then
       renderer=nil
     elseif e=="char" and type(a)=="string" then
-      if a=="s" and config.role=="slave" then notice="Ctrl+T, /processoros/setup.lua" elseif a=="p" then toggle() elseif a=="u" then requestUpdate() elseif a=="n" then page=page+1 elseif a=="b" then page=math.max(1,page-1) end
+      a=a:lower()
+      if a=="s" and config.role=="slave" then
+        if wizard.localSession or updateRequested then print("Finish registration/update first")
+        elseif not wizard.masterSeen or clock()-wizard.masterSeen>5 then print("Master offline; setup unavailable")
+        else config.enabled=false; assert(store.save("config",config)); requestedExit="setup" end
+      elseif a=="g" and config.role=="slave" then
+        if wizard.localSession or updateRequested then print("Finish registration/update first")
+        else
+          write("Group name: "); local name=read()
+          if name and name:match("%S") and #name<=60 then config.name=name; assert(store.save("config",config)); terminalMenu() else print("Name must be 1-60 characters") end
+        end
+      elseif a=="q" then
+        if wizard.localSession then print("Cancel registration on Master first")
+        else config.enabled=false; assert(store.save("config",config)); requestedExit="shell" end
+      elseif a=="p" then toggle(); print(config.enabled and "Feed ON" or "Feed PAUSED"); if notice~="" then print(notice) end
+      elseif a=="u" then requestUpdate(); print(notice)
+      elseif a=="n" then page=page+1 elseif a=="b" then page=math.max(1,page-1)
+      elseif a=="h" or a=="?" then terminalMenu() end
     end
   end
 end
@@ -223,6 +261,13 @@ local function receive()
   end
 end
 parallel.waitForAny(work,display,input,broadcast,receive)
+if exitReason=="shell" then print("ProcessorOS stopped. Run reboot to restart."); return end
+if exitReason=="setup" then
+  terminal.setBackgroundColor(colors.black); terminal.setTextColor(colors.white); terminal.clear(); terminal.setCursorPos(1,1)
+  local ok,err=pcall(dofile,"/processoros/setup.lua")
+  if not ok then printError(tostring(err)) end
+  print("Press Enter to restart ProcessorOS"); read(); os.reboot()
+end
 if exitReason=="reload" then os.reboot() end
 if exitReason=="update" then
   print("Updating local ProcessorOS. Feed remains paused.")

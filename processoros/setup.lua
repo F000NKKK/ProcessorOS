@@ -1,7 +1,7 @@
 local store=dofile("/processoros/storage.lua")
 local core=dofile("/processoros/core.lua")
 local net=dofile("/processoros/network.lua")
-local cfg=store.load("config",dofile("/processoros/config.default.lua"))
+local cfg=store.loadConfig()
 assert(cfg.role=="slave","Only Slave supports local machine setup. Role is fixed in config.")
 local states=store.load("state",{})
 for _,s in pairs(states) do if s.pending or s.baseline or s.phase=="fault" then error("Reconcile active machine before changing ports") end end

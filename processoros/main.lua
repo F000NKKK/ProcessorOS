@@ -30,7 +30,11 @@ local states=store.load("state",{})
 local registry=store.load("registry",{next=1,nodes={}})
 local registered=true
 for _,m in ipairs(config.machines or {}) do if not m.number then registered=false end end
-if config.role=="slave" and (not registered or #config.machines==0 or not config.master_id) then config.feed_hold="registration_required" end
+local function releaseHold()
+  config.feed_hold=nil
+  if config.role=="slave" and (not registered or #config.machines==0 or not config.master_id) then config.feed_hold="registration_required" end
+end
+releaseHold()
 if config.role=="slave" then print(config.slave_number and string.format("Slave %03d",config.slave_number) or "Slave: waiting for Master") end
 local function clock() return os.epoch("utc")/1000 end
 local function io(name)
@@ -278,7 +282,7 @@ end
 local function requestUpdate()
   if wizard.localSession then notice="Registration active"; return end
   if requestedExit then notice="Configuration pending"; return end
-  if updateRequested then updateRequested=false; drainSince=nil; config.feed_hold=nil; notice="Update cancelled; feed preference restored"; return end
+  if updateRequested then updateRequested=false; drainSince=nil; releaseHold(); notice="Update cancelled; feed preference restored"; return end
   config.feed_hold="update"
   updateRequested=true; notice="Drain physical machines before update"
 end
@@ -344,7 +348,7 @@ local function terminalInput()
   while true do
     local a=console.command(read,write)
     if requestedExit=="setup" then
-      if a=="cancel" or a=="x" then requestedExit=nil; drainSince=nil; config.feed_hold=nil; print("Setup cancelled; feed preference restored") else print("Draining; X + Enter cancels") end
+      if a=="cancel" or a=="x" then requestedExit=nil; drainSince=nil; releaseHold(); print("Setup cancelled; feed preference restored") else print("Draining; X + Enter cancels") end
     else
     if a=="setup" and config.role=="slave" then
       if wizard.localSession or updateRequested then print("Finish registration/update first")

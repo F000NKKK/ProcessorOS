@@ -21,7 +21,14 @@ function M.new(reg,net,config,states,store,core,clock,drained,registry)
   function self.tick()
     local w=self.localSession
     if not w then return end
-    if clock()-w.last>30 then self.localSession=nil; config.feed_hold=nil; return end
+    if clock()-w.last>30 then
+      -- Do not resume while a registration marker might still be in a working inventory.
+      if w.phase=="place" or w.phase=="remove" then
+        local ok,err=pcall(function() return reg.observe(w,reg.snapshot()) end)
+        if not ok or err or w.phase=="remove" then return end
+      end
+      self.localSession=nil; config.feed_hold=w.previousHold; return
+    end
     if w.phase=="draining" then
       local ok,empty=pcall(drained)
       if ok and empty then
@@ -92,7 +99,7 @@ function M.new(reg,net,config,states,store,core,clock,drained,registry)
         end end
         if not w.original then send(sender,{kind="status",token=msg.token,phase="blocked",error="Machine not found"}); return end
       end
-      self.localSession=w; config.feed_hold="registration"
+      w.previousHold=config.feed_hold; self.localSession=w; config.feed_hold="registration"
       local ok,empty=pcall(drained)
       if ok and empty and #config.machines==0 then reg.select(w,reg.roles[1]) else w.phase="draining" end
       report(w)
@@ -103,7 +110,7 @@ function M.new(reg,net,config,states,store,core,clock,drained,registry)
     w.last=clock()
     if msg.kind=="cancel" then
       if w.phase=="remove" then report(w,"Remove marker before cancelling"); return end
-      self.localSession=nil; config.feed_hold=nil
+      self.localSession=nil; config.feed_hold=w.previousHold
     elseif msg.kind=="ping" then
       report(w,w.error)
       if w.phase=="saving" then send(sender,{kind="allocate",token=w.token,key=w.machine.id}) end

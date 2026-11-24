@@ -22,3 +22,12 @@ snapshot={chest_0={[1]=1},chest_1={}}
 wizard.tick()
 assert(packets[#packets].phase=="remove" and packets[#packets].error==nil)
 print("wizard status tests passed")
+
+local now=0
+local existing={role="slave",master_id=1,machines={{number=1}},enabled=true}
+local ready=false
+local wiz=mod.new(reg,{},existing,{}, {save=function() return true end},{},function() return now end,function() return ready end,{})
+local function send(kind) wiz.receive(1,{kind=kind,group="factory",token="edit"},mod.protocol) end
+send("begin"); assert(existing.enabled and existing.feed_hold=="registration" and wiz.localSession.phase=="draining")
+ready=true; wiz.tick(); now=10; wiz.tick(); assert(wiz.localSession.phase=="baseline")
+send("cancel"); assert(existing.enabled and existing.feed_hold==nil and not wiz.localSession)

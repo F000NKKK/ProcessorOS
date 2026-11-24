@@ -8,4 +8,4 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y lua5.2
       - run: find processoros tests -name '*.lua' -exec luac5.2 -p {} \;
       - run: luac5.2 -p install.lua startup.lua update
-      - run: lua5.2 tests/test_processor_core.lua && lua5.2 tests/test_processor_network.lua
+      - run: lua5.2 tests/test_processor_core.lua && lua5.2 tests/test_processor_network.lua && lua5.2 tests/test_processor_registration.lua

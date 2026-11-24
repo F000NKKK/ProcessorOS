@@ -1,6 +1,21 @@
 -- Read-only telemetry over CC:T rednet (including Ender modems).
 local M={}
 M.protocol="processoros.telemetry.v1"
+M.registration="processoros.registration.v1"
+function M.allocate(registry,sender,request)
+  if type(sender)~="number" or type(request)~="table" or type(request.keys)~="table" or #request.keys>32 then return nil end
+  local seen={}
+  for _,k in ipairs(request.keys) do if type(k)~="string" or #k>80 or seen[k] then return nil end; seen[k]=true end
+  registry.next=registry.next or 1; registry.nodes=registry.nodes or {}
+  local id=tostring(sender); registry.nodes[id]=registry.nodes[id] or {}
+  local assigned={}
+  for _,k in ipairs(request.keys) do
+    local n=registry.nodes[id][k]
+    if not n then n=registry.next; registry.next=n+1; registry.nodes[id][k]=n end
+    assigned[k]=n
+  end
+  return assigned
+end
 function M.open()
   local count=0
   for _,name in ipairs(peripheral.getNames()) do
@@ -19,7 +34,7 @@ function M.packet(config,states,status)
   local rows={}
   for _,m in ipairs(config.machines or {}) do
     local s=states[m.id] or {}
-    rows[#rows+1]={id=m.id,phase=s.phase or "idle",status=status[m.id] or "IDLE",
+    rows[#rows+1]={id=m.number and string.format("Machine %03d",m.number) or m.id,phase=s.phase or "idle",status=status[m.id] or "IDLE",
       completed=s.completed or 0,error=s.error,enabled=m.enabled~=false}
   end
   return {schema=1,group=config.network_group or "factory",name=config.name or "ProcessorOS",

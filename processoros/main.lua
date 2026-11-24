@@ -3,6 +3,10 @@ local store=dofile("/processoros/storage.lua")
 local net=dofile("/processoros/network.lua")
 local config=store.load("config",dofile("/processoros/config.default.lua"))
 local states=store.load("state",{})
+local registry=store.load("registry",{next=1,nodes={}})
+local registered=true
+for _,m in ipairs(config.machines or {}) do if not m.number then registered=false end end
+if config.role=="slave" and not registered then config.enabled=false end
 local function clock() return os.epoch("utc")/1000 end
 local function io(name)
   local p=peripheral.wrap(name)
@@ -69,7 +73,7 @@ local function draw()
   end
   renderer.setBackgroundColor(colors.black); renderer.clear()
   line(1,"PROCESSOR OS / "..(config.role or "slave"):upper(),colors.cyan)
-  line(2,(config.enabled and "PAUSE FEED" or "START FEED").." | modems "..netCount,colors.lime)
+  line(2,(config.role=="slave" and not registered and "SETUP REQUIRED" or (config.enabled and "PAUSE FEED" or "START FEED")).." | modems "..netCount,colors.lime)
   line(3,updateRequested and "UPDATE: DRAINING / CANCEL" or "UPDATE OS [LOCAL]",colors.yellow)
   local rows=lines()
   local count=math.max(1,h-5)
@@ -118,6 +122,8 @@ local function display()
 end
 local function toggle()
   if updateRequested then notice="Cancel update first"; return end
+  if config.role=="master" and #config.machines==0 then notice="Master is monitor only"; return end
+  if not registered or (config.role=="slave" and not config.master_id) then notice="Register machines with Master first"; return end
   config.enabled=not config.enabled; assert(store.save("config",config))
 end
 local function requestUpdate()
@@ -136,7 +142,7 @@ local function input()
     elseif e=="peripheral" or e=="peripheral_detach" or e=="monitor_resize" then
       renderer=nil
     elseif e=="char" then
-      if a=="m" and #config.machines==0 then config.role="master"; assert(store.save("config",config)); notice="Master mode enabled" elseif a=="p" then toggle() elseif a=="u" then requestUpdate() elseif a=="n" then page=page+1 elseif a=="b" then page=math.max(1,page-1) end
+      if a=="s" and config.role=="slave" then notice="Ctrl+T, /processoros/setup.lua" elseif a=="p" then toggle() elseif a=="u" then requestUpdate() elseif a=="n" then page=page+1 elseif a=="b" then page=math.max(1,page-1) end
     end
   end
 end
@@ -149,9 +155,20 @@ local function broadcast()
 end
 local function receive()
   while true do
-    local sender,msg=rednet.receive(net.protocol)
+    local sender,msg,protocol=rednet.receive()
     if config.role=="master" and sender~=os.getComputerID() then
-      net.accept(nodes,sender,msg,config.network_group or "factory",clock())
+      local group=config.network_group or "factory"
+      if protocol==net.protocol then net.accept(nodes,sender,msg,group,clock())
+      elseif protocol==net.registration and type(msg)=="table" and msg.group==group and type(msg.nonce)=="string" then
+        if msg.kind=="discover" then rednet.send(sender,{kind="discover_ack",group=group,nonce=msg.nonce},net.registration)
+        elseif msg.kind=="allocate" then
+          local assigned=net.allocate(registry,sender,msg)
+          if assigned then
+            assert(store.save("registry",registry))
+            rednet.send(sender,{kind="allocate_ack",group=group,nonce=msg.nonce,assigned=assigned},net.registration)
+          end
+        end
+      end
     end
   end
 end

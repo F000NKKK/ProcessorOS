@@ -271,6 +271,6 @@ end
 if exitReason=="reload" then os.reboot() end
 if exitReason=="update" then
   print("Updating local ProcessorOS. Feed remains paused.")
-  shell.run("/processoros/update.lua")
-  os.reboot()
+  local ok,err=pcall(dofile,"/processoros/update.lua")
+  if not ok then printError("Update failed: "..tostring(err)); print("Feed remains paused. Run update to retry or reboot to restart.") end
 end

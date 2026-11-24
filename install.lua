@@ -29,7 +29,7 @@ local ok,err=pcall(function()
     fs.move(stage.."/"..name,dest)
   end
   write("/startup.lua",'dofile("/processoros/startup.lua")\n')
-  write("/update",'shell.run("/processoros/update.lua")\n')
+  write("/update",'dofile("/processoros/update.lua")\n')
 end)
 if not ok then
   for _,name in ipairs(files) do

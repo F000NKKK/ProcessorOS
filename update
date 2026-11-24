@@ -1,2 +1,2 @@
--- ProcessorOS update command
-shell.run("/processoros/update.lua")
+-- ProcessorOS update command; works without shell injection.
+dofile("/processoros/update.lua")

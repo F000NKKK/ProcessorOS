@@ -28,3 +28,31 @@ raw.pushItems=push
 e=core.new(cfg,st,function(n) return inv[n] end,function() return true end,function() return now end)
 e.tick(); assert(not st.mix.pending and not next(raw.items) and st.mix.phase=="processing")
 print("batch mixer and journal recovery tests passed")
+
+local function tank(name,fluid,amount)
+ local x={fluid=fluid,amount=amount}
+ function x.tanks() return x.amount>0 and {{name=x.fluid,amount=x.amount}} or {} end
+ function x.pushFluid(dest,n,resource)
+  local d=inv[dest]; assert(resource==x.fluid)
+  if d.amount>0 and d.fluid~=resource then return 0 end
+  local a=math.min(n,x.amount); x.amount=x.amount-a; d.fluid=resource; d.amount=d.amount+a; return a
+ end
+ inv[name]=x; return x
+end
+raw.items={[1]={name="minecraft:cocoa_beans",count=2},[2]={name="minecraft:sugar",count=1}}
+basin.items={}; product.items={}
+local milk=tank("milk_0","minecraft:milk",1000)
+local basinFluid=tank("basin_fluid_0",nil,0)
+local productFluid=tank("product_fluid_0",nil,0)
+local outputFluid=tank("output_fluid_0",nil,0)
+cfg.machines[1].connections={
+ {kind="fluid",direction="in",source="milk_0",destination="basin_fluid_0"},
+ {kind="fluid",direction="out",source="product_fluid_0",destination="output_fluid_0"}
+}
+st={}; now=10; e=core.new(cfg,st,function(n) return inv[n] end,function() return true end,function() return now end)
+e.tick(); now=11; for i=1,5 do e.tick() end
+assert(st.mix.batch.phase=="processing" and milk.amount==0 and basinFluid.amount==1000 and not next(raw.items))
+basin.items={}; basinFluid.amount=0; productFluid.fluid="create:chocolate"; productFluid.amount=1000
+e.tick(); assert(outputFluid.amount==1000 and st.mix.fluidCompleted==1000)
+now=14; e.tick(); assert(not st.mix.batch)
+print("mixed item/fluid batch and liquid result passed")

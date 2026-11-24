@@ -485,7 +485,14 @@ function M.new(config,states,io,save,clock)
       -- Do not take a second batch until the previous batch has been isolated.
       for _,other in ipairs(config.machines) do
         local s=states[other.id]
-        if other.id~=m.id and s and (s.staging or s.batch) and port(other.ports.input).name==p.input.name then self.status[m.id]="WAITING BATCH"; return end
+        if other.id~=m.id and s and (s.staging or s.batch or s.pending) then
+          if port(other.ports.input).name==p.input.name then self.status[m.id]="WAITING BATCH"; return end
+          for _,a in ipairs(m.connections or {}) do if a.direction=="in" then
+            for _,b in ipairs(other.connections or {}) do
+              if b.direction=="in" and a.kind==b.kind and a.source==b.source then self.status[m.id]="WAITING BATCH"; return end
+            end
+          end end
+        end
       end
       if next(inv.machine_input.list()) or next(inv.machine_output.list()) or not M.extraEmpty(m,io) then self.status[m.id]="DRAIN WORK PORTS"; return end
       local entries={}
@@ -576,6 +583,7 @@ function M.new(config,states,io,save,clock)
   local function step(m,load)
     local st=states[m.id] or {phase="idle",completed=0}
     states[m.id]=st
+    if st.pending and load then return end
     if st.pending and not recoverBatch(st) and not recoverSingle(st) then st.phase="fault"; st.error="Uncertain transfer; inspect ports"; self.status[m.id]="FAULT"; return end
     if st.phase=="fault" then return end
     local p={} local inv={}

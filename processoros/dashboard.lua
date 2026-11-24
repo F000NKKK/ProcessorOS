@@ -100,7 +100,7 @@ function M.details(r,model)
     local p=m.ports[k]; local text=type(p)=="table" and (tostring(p.name)..(p.slot and ":"..p.slot or "")) or tostring(p or "N/A")
     line(6+i," "..k..": "..text,colors.lightGray)
   end
-  line(11," EXTRA PORTS: "..#(m.connections or {}).." / EDIT PORTS",colors.cyan)
+  line(11," PORTS: "..#(m.connections or {}).." extra | Fluid: "..tostring(m.fluidCompleted or 0).." mB",colors.cyan)
   line(12," OUTPUT HISTORY (items/min)",colors.cyan)
   local history=model.history or {}; local max=1
   for _,v in ipairs(history) do max=math.max(max,v) end

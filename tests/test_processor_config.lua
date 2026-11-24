@@ -1,0 +1,7 @@
+local store=dofile("processoros/storage.lua")
+local c=store.normalizeConfig({role="master"},{machines={},enabled=false,monitor="auto"})
+assert(c.role=="master" and #c.machines==0 and c.monitor=="auto")
+assert(not c.enabled)
+local old=store.normalizeConfig({role="slave",machines={{id="x"}},slave_number="bad"},{machines={}})
+assert(old.machines[1].id=="x" and old.slave_number==nil)
+print("config migration tests passed")

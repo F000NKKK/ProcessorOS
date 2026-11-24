@@ -39,4 +39,22 @@ function M.save(name, value)
   return write(fs.combine(root, name), value)
 end
 
+function M.normalizeConfig(cfg,defaults)
+  for k,v in pairs(defaults) do if cfg[k]==nil then cfg[k]=v end end
+  assert(type(cfg.machines)=="table","Invalid machines configuration; inspect /processoros/data/config")
+  if cfg.role~=nil then assert(cfg.role=="master" or cfg.role=="slave","Invalid controller role") end
+  if type(cfg.name)~="string" then cfg.name="ProcessorOS" end
+  if type(cfg.network_group)~="string" then cfg.network_group="factory" end
+  if type(cfg.slave_number)~="number" then cfg.slave_number=nil end
+  if type(cfg.master_id)~="number" then cfg.master_id=nil end
+  cfg.enabled=cfg.enabled==true
+  cfg.poll_seconds=tonumber(cfg.poll_seconds) or 0.1
+  cfg.monitor_scale=tonumber(cfg.monitor_scale) or 0.5
+  return cfg
+end
+function M.loadConfig()
+  local defaults=dofile("/processoros/config.default.lua")
+  local cfg=M.load("config",{})
+  return M.normalizeConfig(cfg,defaults)
+end
 return M

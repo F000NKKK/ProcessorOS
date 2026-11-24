@@ -7,7 +7,7 @@ local wizard
 local selectedNode=1
 local queue={}
 local function nodeIds(nodes) local ids={} for id in pairs(nodes) do ids[#ids+1]=id end table.sort(ids); return ids end
-local config=store.load("config",dofile("/processoros/config.default.lua"))
+local config=store.loadConfig()
 local states=store.load("state",{})
 local registry=store.load("registry",{next=1,nodes={}})
 local registered=true
@@ -26,7 +26,8 @@ local terminal=term.current()
 local function refreshMonitor(force)
   local names={}
   for _,name in ipairs(peripheral.getNames()) do
-    if peripheral.hasType(name,"monitor") then names[#names+1]=name end
+    local ok,kind=pcall(peripheral.getType,name)
+    if ok and kind=="monitor" then names[#names+1]=name end
   end
   table.sort(names)
   local chosen=config.monitor
@@ -47,7 +48,8 @@ local function refreshMonitor(force)
     renderer=rendererModule.create(screen)
   end
 end
-refreshMonitor(true)
+local initialOk,initialError=pcall(refreshMonitor,true)
+if not initialOk then printError("Monitor initialization: "..tostring(initialError)) end
 local nodes,page,updateRequested,exitReason={},1,false,nil
 local netCount=0
 local notice=""
@@ -169,9 +171,9 @@ end
 local function input()
   while true do
     local e,a,b,c=os.pullEvent()
-    if e=="monitor_touch" and monitor and a==monitorName then
+    if e=="monitor_touch" and monitor and screen and wizard and a==monitorName and type(b)=="number" and type(c)=="number" then
       local ok,w,h=pcall(screen.getSize)
-      if ok then
+      if ok and type(w)=="number" and type(h)=="number" then
       if wizard.remote then
         if c>=5 and c<=8 then wizard.command("select",reg.roles[c-4])
         elseif c==14 then wizard.command("save")
@@ -185,7 +187,7 @@ local function input()
       end
     elseif e=="peripheral" or e=="peripheral_detach" or e=="monitor_resize" then
       renderer=nil
-    elseif e=="char" then
+    elseif e=="char" and type(a)=="string" then
       if a=="s" and config.role=="slave" then notice="Ctrl+T, /processoros/setup.lua" elseif a=="p" then toggle() elseif a=="u" then requestUpdate() elseif a=="n" then page=page+1 elseif a=="b" then page=math.max(1,page-1) end
     end
   end
@@ -200,6 +202,7 @@ end
 local function receive()
   while true do
     local sender,msg,protocol=rednet.receive()
+    if type(sender)~="number" then sleep(0.1) else
     if protocol==wizardModule.protocol and sender~=os.getComputerID() then
       if #queue<128 then queue[#queue+1]={sender,msg,protocol} end
     elseif config.role=="master" and sender~=os.getComputerID() then
@@ -215,6 +218,7 @@ local function receive()
           end
         end
       end
+    end
     end
   end
 end

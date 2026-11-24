@@ -35,7 +35,7 @@ function M.packet(config,states,status)
   for _,m in ipairs(config.machines or {}) do
     local s=states[m.id] or {}
     rows[#rows+1]={id=m.number and string.format("Machine %03d",m.number) or m.id,phase=s.phase or "idle",status=status[m.id] or "IDLE",
-      completed=s.completed or 0,error=s.error,enabled=m.enabled~=false}
+      completed=s.completed or 0,error=s.error,enabled=m.enabled~=false,number=m.number,ports=m.ports}
   end
   return {schema=1,group=config.network_group or "factory",name=config.name or "ProcessorOS",
     role=config.role or "slave",slaveNumber=config.slave_number,enabled=config.enabled==true,machines=rows}
@@ -47,7 +47,7 @@ function M.accept(nodes,sender,msg,group,now)
   for _,r in ipairs(msg.machines) do
     if type(r)~="table" or type(r.id)~="string" or type(r.status)~="string" or type(r.phase)~="string" then return false end
     rows[#rows+1]={id=r.id:sub(1,40),phase=r.phase:sub(1,30),status=r.status:sub(1,100),
-      completed=tonumber(r.completed) or 0,error=type(r.error)=="string" and r.error:sub(1,100) or nil}
+      number=type(r.number)=="number" and r.number or nil,enabled=r.enabled~=false,ports=type(r.ports)=="table" and r.ports or {},completed=tonumber(r.completed) or 0,error=type(r.error)=="string" and r.error:sub(1,100) or nil}
   end
   nodes[sender]={name=(type(msg.slaveNumber)=="number" and string.format("Slave %03d / ",msg.slaveNumber) or "")..msg.name:sub(1,60),machines=rows,enabled=msg.enabled==true,seen=now}
   return true

@@ -8,6 +8,19 @@ local control=dofile("/processoros/control.lua")
 local hits,frame,pending,received={},0,{},{}
 local commandCounter=0
 local confirmUpdate=nil
+local detail,confirmDelete=nil,nil
+local history={}
+local function sample(id,rows,now)
+  for _,m in ipairs(rows) do if m.number then
+    local key=tostring(id)..":"..m.number
+    local s=history[key] or {last=m.completed,at=now,values={},rate=0}; history[key]=s
+    if now-s.at>=10 then
+      s.rate=math.max(0,m.completed-s.last)*60/(now-s.at)
+      s.values[#s.values+1]=s.rate; if #s.values>60 then table.remove(s.values,1) end
+      s.at=now; s.last=m.completed
+    end
+  end end
+end
 local wizard
 local selectedNode=1
 local queue={}
@@ -106,19 +119,31 @@ local function draw()
   renderer.setBackgroundColor(colors.black); renderer.clear()
   line(1,"PROCESSOR OS / "..(config.role or "slave"):upper()..(config.slave_number and string.format(" %03d",config.slave_number) or ""),colors.cyan)
   if wizard and wizard.remote then
+    frame=frame+1
     hits={}
     local w=wizard.remote
     line(2,"REGISTER MACHINE / NODE #"..w.id,colors.cyan)
-    line(3,w.phase=="place" and "Place ONE cobblestone in selected port" or w.phase=="remove" and "Remove the marker from detected port" or tostring(w.phase),colors.yellow)
+    line(3,({"|","/","-","\\"})[frame%4+1].." "..(w.phase=="place" and "Place ONE cobblestone in selected port" or w.phase=="remove" and "Remove the marker from detected port" or tostring(w.phase)),colors.yellow)
     for i,r in ipairs(reg.roles) do
       line(4+i,(w.role==r and "> " or "  ")..r..": "..(w.ports[r] or "NOT REGISTERED"),w.ports[r] and colors.lime or colors.white)
     end
     if w.candidate then line(10,"Detected: "..w.candidate.name,colors.cyan) end
     line(12,w.error or "Touch any port to register / repeat",colors.orange)
-    line(14,"SAVE MACHINE",colors.lime); line(16,"CANCEL / BACK",colors.red)
+    local done=0; for _,role in ipairs(reg.roles) do if w.ports[role] then done=done+1 end end
+    line(13,"Ports: ["..string.rep("#",done)..string.rep("-",4-done).."] "..done.."/4",colors.cyan)
+    line(14,w.phase=="saving" and "SAVING..." or "SAVE MACHINE",colors.lime); line(16,w.phase=="saved" and "DONE / BACK" or "CANCEL / BACK",colors.red)
     renderer.flush(); return
   end
   if config.role=="master" and h>=16 and w>=35 then
+    if detail then
+      local n=nodes[detail.id]; local machine
+      if n then for _,v in ipairs(n.machines) do if v.number==detail.number then machine=v; break end end end
+      if machine then
+        local s=history[tostring(detail.id)..":"..detail.number] or {}
+        hits=dashboard.details(renderer,{machine=machine,node={name=n.name,online=clock()-n.seen<=5},history=s.values,rate=s.rate,notice=notice})
+        renderer.flush(function() sleep(0) end); return
+      else detail=nil end
+    end
     local ids=nodeIds(nodes); selectedNode=math.max(1,math.min(selectedNode,#ids))
     local list={}
     for _,id in ipairs(ids) do
@@ -158,10 +183,10 @@ local function drained()
 end
 wizard=wizardModule.new(reg,net,config,states,store,core,clock,drained,registry)
 local drainSince
-local function sendControl(id,action,enabled)
+local function sendControl(id,action,enabled,number)
   commandCounter=commandCounter+1
   local token=tostring(os.getComputerID())..":"..os.epoch("utc")..":"..commandCounter
-  local msg={group=config.network_group or "factory",token=token,action=action,enabled=enabled}
+  local msg={group=config.network_group or "factory",token=token,action=action,enabled=enabled,number=number}
   pending[token]={id=id,at=clock()}
   local ok,sent=pcall(rednet.send,id,msg,control.protocol)
   if not ok or not sent then pending[token]=nil; notice="Command not sent" else notice="Command sent; awaiting ACK" end
@@ -181,10 +206,18 @@ local function work()
         elseif control.authorized(config,sender,msg) then
           local cached=received[msg.token]
           if not cached then
-            local accepted,message,action=control.apply(config,msg,wizard.localSession~=nil or updateRequested or requestedExit~=nil,store.save)
+            local accepted,message,action=control.apply(config,msg,wizard.localSession~=nil or updateRequested or requestedExit~=nil,store.save,function(machine)
+              local s=states[machine.id] or {}; if s.pending or s.baseline or s.phase=="fault" then return false end
+              for _,r in ipairs({"machine_input","machine_output"}) do
+                local p=machine.ports[r]; if type(p)=="string" then p={name=p} end
+                local inv=io(p.name); if not inv then return false end
+                for slot in pairs(inv.list()) do if not p.slot or slot==p.slot then return false end end
+              end
+              return true
+            end)
             cached={kind="ack",group=config.network_group or "factory",token=msg.token,ok=accepted,message=message}
             received[msg.token]=cached
-            if action=="update" then updateRequested=true; drainSince=nil end
+            if action=="update" then updateRequested=true; drainSince=nil elseif action=="reload" then requestedExit="reload" end
           end
           rednet.send(sender,cached,control.protocol)
         end
@@ -247,7 +280,23 @@ local function monitorInput()
           local action=dashboard.hit(hits,b,c)
           if action then
             local ids=nodeIds(nodes); local id=ids[selectedNode]; local n=id and nodes[id]
-            if action.kind=="node" then selectedNode=selectedNode+(b>w/2 and 1 or -1); selectedNode=math.max(1,math.min(selectedNode,#ids)); confirmUpdate=nil
+            if action.kind=="details" then if action.number then detail={id=action.node,number=action.number}; confirmDelete=nil end
+            elseif action.kind=="close" then detail=nil; confirmDelete=nil
+            elseif detail and (action.kind=="edit" or action.kind=="delete" or action.kind=="machine_feed") then
+              local dn=nodes[detail.id]; local dm
+              if dn then for _,v in ipairs(dn.machines) do if v.number==detail.number then dm=v; break end end end
+              if not dm or clock()-dn.seen>5 then notice="Slave offline"
+              elseif action.kind=="edit" then wizard.start(detail.id,detail.number)
+              elseif action.kind=="machine_feed" then sendControl(detail.id,"machine_feed",not dm.enabled,detail.number)
+              elseif confirmDelete==detail.number then sendControl(detail.id,"delete",nil,detail.number); confirmDelete=nil
+              else confirmDelete=detail.number; notice="Pause node feed, drain machine, tap DELETE again" end
+            elseif action.kind=="update_all" then
+              if confirmUpdate=="all" then
+                confirmUpdate=nil; local count=0
+                for id,v in pairs(nodes) do if clock()-v.seen<=5 then sendControl(id,"update"); count=count+1 end end
+                notice="Update requested on "..count.." online Slaves"
+              else confirmUpdate="all"; notice="Tap UPDATE ALL SLAVES again to confirm" end
+            elseif action.kind=="node" then selectedNode=selectedNode+(b>w/2 and 1 or -1); selectedNode=math.max(1,math.min(selectedNode,#ids)); confirmUpdate=nil
             elseif action.kind=="prev" then page=math.max(1,page-1)
             elseif action.kind=="next" then page=page+1
             elseif action.kind=="update_master" then requestUpdate()
@@ -317,7 +366,7 @@ local function receive()
       if #queue<128 then queue[#queue+1]={sender,msg,protocol} end
     elseif config.role=="master" and sender~=os.getComputerID() then
       local group=config.network_group or "factory"
-      if protocol==net.protocol then net.accept(nodes,sender,msg,group,clock())
+      if protocol==net.protocol then if net.accept(nodes,sender,msg,group,clock()) then sample(sender,nodes[sender].machines,clock()) end
       elseif protocol==net.registration and type(msg)=="table" and msg.group==group and type(msg.nonce)=="string" then
         if msg.kind=="discover" then rednet.send(sender,{kind="discover_ack",group=group,nonce=msg.nonce},net.registration)
         elseif msg.kind=="allocate" then

@@ -8,9 +8,9 @@ function M.new(reg,net,config,states,store,core,clock,drained,registry)
   local function report(w,err)
     send(w.owner,{kind="status",token=w.token,phase=w.phase,role=w.role,ports=w.ports,candidate=w.candidate,error=err})
   end
-  function self.start(id)
+  function self.start(id,number)
     self.remote={id=id,token=tostring(os.getComputerID())..":"..os.epoch("utc"),phase="connecting",ports={},seen=clock()}
-    send(id,{kind="begin",token=self.remote.token})
+    send(id,{kind="begin",token=self.remote.token,number=number})
   end
   function self.command(kind,role)
     local w=self.remote; if not w then return end
@@ -74,7 +74,17 @@ function M.new(reg,net,config,states,store,core,clock,drained,registry)
       local ok,empty=pcall(drained)
       if not ok or not empty then send(sender,{kind="status",token=msg.token,phase="blocked",error="Feed paused; drain machines first and retry"}); return end
       local w={owner=sender,token=msg.token,ports={},last=clock()}
-      self.localSession=w; reg.select(w,reg.roles[1]); report(w)
+      if msg.number then
+        for i,m in ipairs(config.machines) do if m.number==msg.number then
+          w.editIndex=i; w.original=m
+          for _,r in ipairs(reg.roles) do local p=m.ports[r]; w.ports[r]=type(p)=="table" and p.name or p end
+          break
+        end end
+        if not w.original then send(sender,{kind="status",token=msg.token,phase="blocked",error="Machine not found"}); return end
+      end
+      self.localSession=w
+      if w.original then w.phase="confirmed" else reg.select(w,reg.roles[1]) end
+      report(w)
       return
     end
     local w=self.localSession
@@ -91,13 +101,17 @@ function M.new(reg,net,config,states,store,core,clock,drained,registry)
       if w.phase~="confirmed" then report(w,"Confirm marker removal first"); return end
       for _,r in ipairs(reg.roles) do if not w.ports[r] then report(w,"Register all four ports"); return end end
       local key=w.ports.machine_input.."|"..w.ports.machine_output
-      local machine={id=key,ports=w.ports,enabled=true,batch_size=1}
+      local machine={id=w.original and w.original.id or key,ports=w.ports,enabled=w.original==nil or w.original.enabled~=false,batch_size=w.original and w.original.batch_size or 1,timeout=w.original and w.original.timeout}
       local draft={} for i,m in ipairs(config.machines) do draft[i]=m end
       local replace
       for i,m in ipairs(draft) do if m.id==key then replace=i end end
-      if replace then draft[replace]=machine else draft[#draft+1]=machine end
+      if w.editIndex then draft[w.editIndex]=machine elseif replace then draft[replace]=machine else draft[#draft+1]=machine end
       local ok,err=pcall(core.validate,{machines=draft})
       if not ok then report(w,tostring(err)); return end
+      if w.original then
+        machine.number=w.original.number; config.machines=draft; assert(store.save("config",config))
+        w.phase="saved"; report(w); self.localSession=nil; return "reload"
+      end
       w.draft=draft; w.machine=machine; w.phase="saving"; report(w)
       send(sender,{kind="allocate",token=w.token,key=key})
     elseif msg.kind=="assigned" and w.phase=="saving" and msg.key==w.machine.id and type(msg.number)=="number" and msg.number>=1 and msg.number%1==0 then

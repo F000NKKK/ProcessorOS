@@ -60,7 +60,7 @@ function M.draw(r,model)
       local busy=node.online and active(m) and m.phase~="fault"
       local color=not node.online and colors.gray or (m.phase=="fault" and colors.red or (busy and colors.yellow or colors.lime))
       local state=not node.online and "OFFLINE" or (m.phase=="fault" and "FAULT" or (not node.enabled and not busy and "PAUSED" or m.status))
-      paint(x,y,l.width," "..m.id,color,colors.gray)
+      button(x,y,l.width," "..m.id.." >",{kind="details",node=node.id,number=m.number},colors.gray)
       paint(x,y+1,l.width," "..node.name,colors.lightGray)
       paint(x,y+2,l.width," "..state,color)
       local bar=math.max(1,l.width-2)
@@ -75,8 +75,47 @@ function M.draw(r,model)
   local half=math.floor(w/2)
   button(1,h-1,half," < PAGE "..page.."/"..l.pages,{kind="prev"})
   button(half+1,h-1,w-half," NEXT >",{kind="next"})
-  button(1,h,w," UPDATE MASTER",{kind="update_master"},colors.brown)
+  button(1,h,half," UPDATE MASTER",{kind="update_master"},colors.brown)
+  button(half+1,h,w-half," UPDATE ALL SLAVES",{kind="update_all"},colors.brown)
   return hits,page
+end
+function M.details(r,model)
+  local w,h=r.getSize()
+  local hits={}
+  local function line(y,s,fg,bg)
+    if y<1 or y>h then return end
+    s=clip(s,w); r.setCursorPos(1,y); r.setTextColor(fg or colors.white); r.setBackgroundColor(bg or colors.black); r.write(s..string.rep(" ",w-#s))
+  end
+  local function button(y,s,kind,bg)
+    line(y,s,colors.white,bg or colors.gray); hits[#hits+1]={x=1,y=y,w=w,action={kind=kind}}
+  end
+  r.setBackgroundColor(colors.black); r.clear()
+  local m,n=model.machine,model.node
+  line(1," PROCESSOR OS / MACHINE DETAILS",colors.cyan,colors.gray)
+  line(3," "..m.id.." / "..n.name,colors.cyan)
+  line(4," State: "..(n.online and (m.phase=="fault" and "FAULT" or m.status) or "OFFLINE"))
+  line(5," Completed: "..m.completed.."   Rate: "..string.format("%.1f",model.rate or 0).." items/min")
+  local roles={"input","machine_input","machine_output","output"}
+  for i,k in ipairs(roles) do
+    local p=m.ports[k]; local text=type(p)=="table" and (tostring(p.name)..(p.slot and ":"..p.slot or "")) or tostring(p or "N/A")
+    line(6+i," "..k..": "..text,colors.lightGray)
+  end
+  line(11," OUTPUT HISTORY (items/min)",colors.cyan)
+  local history=model.history or {}; local max=1
+  for _,v in ipairs(history) do max=math.max(max,v) end
+  local maxbars=math.max(0,math.min(5,h-19))
+  for y=1,maxbars do
+    local s=""
+    for i=math.max(1,#history-w+3),#history do s=s..(history[i]>0 and history[i]/max>=(maxbars-y+1)/maxbars and "#" or " ") end
+    line(11+y," "..s,colors.lime)
+  end
+  if m.error then line(h-7," "..m.error,colors.red) end
+  button(h-6,m.enabled and " PAUSE MACHINE" or " ENABLE MACHINE","machine_feed",colors.blue)
+  button(h-5," EDIT PORTS","edit",colors.blue)
+  button(h-4," DELETE MACHINE","delete",colors.red)
+  line(h-2,model.notice or "",colors.orange)
+  button(h," < BACK","close")
+  return hits
 end
 function M.hit(hits,x,y)
   for _,v in ipairs(hits or {}) do if y==v.y and x>=v.x and x<v.x+v.w then return v.action end end

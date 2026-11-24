@@ -9,7 +9,7 @@ for _,n in ipairs(peripheral.getNames()) do
   if n:find("_%d+$") and p and p.list and p.pushItems then names[#names+1]=n end
 end
 table.sort(names)
-assert(#names>0,"No wired inventories")
+
 local function choose(label,default)
   for i,n in ipairs(names) do print(i..": "..n) end
   write(label..(default and " ["..default.."]" or "")..": ")
@@ -18,10 +18,13 @@ local function choose(label,default)
   return assert(names[tonumber(v)],"Invalid port")
 end
 write("Factory name ["..cfg.name.."]: "); local name=read(); if name~="" then cfg.name=name end
-write("Number of machines: "); local count=tonumber(read()); assert(count and count>=1 and count<=32 and count%1==0)
+write("Role master/slave ["..(cfg.role or "slave").."]: "); local role=read(); if role~="" then assert(role=="master" or role=="slave"); cfg.role=role end
+write("Network group ["..(cfg.network_group or "factory").."]: "); local group=read(); if group~="" then cfg.network_group=group end
+write("Number of machines (0 for monitor-only master): "); local count=tonumber(read()); assert(count and count>=0 and count<=32 and count%1==0)
+if count>0 then assert(#names>0,"No wired inventories") end
 local machines={}
-local input=choose("Default input")
-local output=choose("Default output")
+local input=count>0 and choose("Default input")
+local output=count>0 and choose("Default output")
 for i=1,count do
   print("Machine "..i)
   local a=choose("Input",input)

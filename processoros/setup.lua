@@ -234,6 +234,7 @@ while true do
   print("Raw ports: "..#raw.." | Machines: "..#machines)
   for i,m in ipairs(machines) do print(i..". "..tostring(m.number or "NEW").." "..spec(m.ports.machine_input).name) end
   print("I = group ports   A = add machine")
+  print("New bindings default to AUTO")
   print("E = edit machine  G = rename group")
   print("S = save   Q = discard")
   local v=ask():lower()

@@ -37,3 +37,21 @@ e.tick()
 assert(raw.items[1] and source.amount==1000)
 for i=1,3 do assert(e.status[tostring(i)]=="WRONG FLUID") end
 print("automatic resource routing tests passed")
+
+-- AUTO residual fluid does not permanently block a reboot-only update.
+assert(core.extraEmpty(cfg.machines[1],function(n) return inv[n] end,true))
+assert(not core.extraEmpty(cfg.machines[1],function(n) return inv[n] end,false))
+-- Incompatible residual must not be returned to the raw tank.
+cfg.feed_hold="setup"; e.tick(); assert(source.fluid=="minecraft:lava" and source.amount==1000)
+source.amount=0; cfg.feed_hold="setup"; e.tick(); assert(source.fluid=="minecraft:water" and source.amount==30)
+for i=1,3 do assert(inv["spout_"..i].amount==0) end
+-- A staged machine prevents sibling machines from taking the unallocated input.
+cfg.feed_hold=nil; source.amount=750; raw.items[1]={name="minecraft:glass_bottle",count=3}
+local original=source.pushFluid
+source.pushFluid=function(dest,n,resource) return original(dest,math.min(n,50),resource) end
+local es=core.new(cfg,{},function(n) return inv[n] end,function() return true end,function() return 0 end)
+es.tick()
+assert(es.states["1"].staging and raw.items[1].count==3)
+assert(es.status["2"]=="WAITING STAGED BATCH" and es.status["3"]=="WAITING STAGED BATCH")
+for i=1,4 do es.tick() end
+assert(not es.states["1"].staging and inv.depot_1.items[1])

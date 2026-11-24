@@ -86,7 +86,9 @@ function M.extraEmpty(m,io,allowTools)
     if not p then return false end
     if c.kind=="fluid" then
       if not p.tanks then return false end
-      for _,v in pairs(p.tanks()) do if v.amount>0 then return false end end
+      for _,v in pairs(p.tanks()) do
+        if v.amount>0 and not (allowTools and c.direction=="in" and not c.resource) then return false end
+      end
     else
       if not p.list then return false end
       for _,v in pairs(p.list()) do
@@ -164,8 +166,10 @@ function M.new(config,states,io,save,clock)
     local amount,other=0,false
     local rows=c.kind=="fluid" and p.tanks() or p.list()
     for _,v in pairs(rows) do
-      if v.name==c.resource then amount=amount+(c.kind=="fluid" and v.amount or v.count)
-      else other=true end
+      local n=c.kind=="fluid" and v.amount or v.count
+      if n and n>0 then
+        if v.name==c.resource then amount=amount+n else other=true end
+      end
     end
     return amount,other
   end
@@ -302,19 +306,37 @@ function M.new(config,states,io,save,clock)
     end
     return true
   end
+  local function returnResidual(m,st)
+    if (config.feed_hold~="setup" and config.feed_hold~="registration") or st.staging or st.active or st.baseline then return end
+    for _,c in ipairs(m.connections or {}) do
+      if c.kind=="fluid" and c.direction=="in" and not c.resource then
+        local src,dst=io(c.destination),io(c.source)
+        if src and dst and src.tanks and dst.tanks and src.pushFluid then
+          local a,an=contents(src,"fluid")
+          local _,bn=contents(dst,"fluid")
+          if #an==1 and (#bn==0 or (#bn==1 and bn[1]==an[1])) then
+            local r=resolved({kind="fluid",source=c.destination,destination=c.source},an[1],a[an[1]])
+            resourceMove(st,r,r.amount)
+          end
+        end
+      end
+    end
+  end
   local function step(m,load)
     local st=states[m.id] or {phase="idle",completed=0}
     states[m.id]=st
-    if st.pending then st.phase="fault"; st.error="Uncertain transfer; inspect ports"; return end
+    if st.pending then st.phase="fault"; st.error="Uncertain transfer; inspect ports"; self.status[m.id]="FAULT"; return end
     if st.phase=="fault" then return end
     local p={} local inv={}
     for _,r in ipairs(roles) do p[r]=port(m.ports[r]); inv[r]=io(p[r].name); if not inv[r] then self.status[m.id]="OFFLINE "..r; return end end
     local same=p.machine_input.name==p.machine_output.name and (not p.machine_input.slot or not p.machine_output.slot or p.machine_input.slot==p.machine_output.slot)
     local work=slots(inv.machine_output)
     if not load then
+      if #work==0 and #slots(inv.machine_input)==0 then returnResidual(m,st) end
       local outputs,why=resolve(m,p.input,nil,false)
       if not outputs then self.status[m.id]=why; return end
       if not extra(m,st,false,outputs) then return end
+      local ready=false
       for _,v in ipairs(work) do
         if allowed(p.machine_output,v.slot) then
           if same and (not st.baseline or key(v.item)==st.baseline) then
@@ -322,6 +344,7 @@ function M.new(config,states,io,save,clock)
           elseif m.result_filter and v.item.name~=m.result_filter then
             self.status[m.id]="UNEXPECTED RESULT"; st.phase="fault"; st.error="Unexpected result: "..v.item.name; persist(); return
           else
+            ready=true
             local n=transfer(st,p.machine_output,p.output,v.slot,v.item.count)
             st.completed=st.completed+n
             if n==v.item.count and (same or st.active) then st.baseline=nil; st.active=nil; st.phase="idle"; st.started=nil; st.staging=nil end
@@ -330,7 +353,7 @@ function M.new(config,states,io,save,clock)
           end
         end
       end
-      if (same and st.baseline) or st.active then
+      if not ready and ((same and st.baseline) or st.active) then
         self.status[m.id]="PROCESSING"
         if clock()-(st.started or clock())>(m.timeout or 300) then st.phase="fault"; st.error="Processing timeout"; persist() end
       end
@@ -342,6 +365,20 @@ function M.new(config,states,io,save,clock)
     end
     if config.role=="slave" and (not config.master_id or not m.number) then return end
     if st.active then return end
+    if not st.staging then
+      for _,other in ipairs(config.machines) do
+        local os=states[other.id]
+        if other.id~=m.id and os and os.staging then
+          local op=port(other.ports.input)
+          if op.name==p.input.name then self.status[m.id]="WAITING STAGED BATCH"; return end
+          for _,a in ipairs(m.connections or {}) do
+            if a.direction=="in" then for _,b in ipairs(other.connections or {}) do
+              if b.direction=="in" and a.kind==b.kind and a.source==b.source then self.status[m.id]="WAITING STAGED BATCH"; return end
+            end end
+          end
+        end
+      end
+    end
     if same then
       if st.baseline then return end
       for _,v in ipairs(slots(inv.machine_input)) do if allowed(p.machine_input,v.slot) then return end end

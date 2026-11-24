@@ -100,7 +100,7 @@ function M.details(r,model)
     local p=m.ports[k]; local text=type(p)=="table" and (tostring(p.name)..(p.slot and ":"..p.slot or "")) or tostring(p or "N/A")
     line(6+i," "..k..": "..text,colors.lightGray)
   end
-  line(11," EXTRA PORTS: "..#(m.connections or {}).." / configure on Slave",colors.cyan)
+  line(11," EXTRA PORTS: "..#(m.connections or {}).." / EDIT PORTS",colors.cyan)
   line(12," OUTPUT HISTORY (items/min)",colors.cyan)
   local history=model.history or {}; local max=1
   for _,v in ipairs(history) do max=math.max(max,v) end
@@ -116,6 +116,57 @@ function M.details(r,model)
   button(h-4," DELETE MACHINE","delete",colors.red)
   line(h-2,model.notice or "",colors.orange)
   button(h," < BACK","close")
+  return hits
+end
+function M.typed(r,session,ui)
+  local w,h=r.getSize()
+  local hits={}
+  local function paint(x,y,n,s,bg,action)
+    if y<1 or y>h or n<1 or x>w then return end
+    n=math.min(n,w-x+1); s=clip(s,n)
+    r.setCursorPos(x,y); r.setTextColor(colors.white); r.setBackgroundColor(bg or colors.black); r.write(s..string.rep(" ",n-#s))
+    if action then hits[#hits+1]={x=x,y=y,w=n,action=action} end
+  end
+  r.setBackgroundColor(colors.black); r.clear()
+  paint(1,1,w," TYPED PORT EDITOR / SLAVE #"..session.id,colors.gray)
+  paint(1,2,w," "..tostring(session.phase).." "..(session.error or ""),colors.black)
+  paint(1,h,w,session.phase=="saved" and " DONE / BACK" or " CANCEL / BACK",colors.red,{kind="cancel"})
+  if session.phase~="typed" then return hits end
+  local cap=math.max(1,h-8)
+  local list={}
+  if ui.mode=="pick" then
+    for _,d in ipairs(session.devices or {}) do if d.kind==ui.kind then list[#list+1]=d end end
+    paint(1,3,w," Select "..ui.kind.." peripheral",colors.blue)
+  else
+    list=session.raw or {}
+    local q=math.floor(w/4)
+    for i,opt in ipairs({{"ITEM IN","item","in"},{"FLUID IN","fluid","in"},{"ITEM OUT","item","out"},{"FLUID OUT","fluid","out"}}) do
+      paint(1+(i-1)*q,3,q,"+"..opt[1],colors.blue,{kind="pick",op="add_raw",resourceKind=opt[2],direction=opt[3]})
+    end
+    paint(1,4,w," MODE: "..(session.mode or "single"),colors.gray,{kind="op",op="mode"})
+  end
+  local pages=math.max(1,math.ceil(#list/cap))
+  ui.page=math.min(ui.page,pages)
+  for i=1,cap do
+    local v=list[(ui.page-1)*cap+i]
+    if v then
+      if ui.mode=="pick" then paint(1,4+i,w,v.name,colors.gray,{kind="device",name=v.name})
+      else
+        local bound
+        for _,b in ipairs(session.bindings or {}) do if b.raw==v.id then bound=b; break end end
+        local n=math.max(1,w-25)
+        paint(1,4+i,n,(v.kind=="fluid" and "F " or "I ")..v.direction.." "..v.name.." > "..(bound and bound.name or "NONE"),colors.gray)
+        paint(n+1,4+i,6," BIND",colors.blue,{kind="pick",op="bind",raw=v.id,resourceKind=v.kind})
+        paint(n+7,4+i,6," REPL",colors.brown,{kind="pick",op="replace_raw",raw=v.id,resourceKind=v.kind})
+        paint(n+13,4+i,6," UNB",colors.gray,{kind="op",op="unbind",raw=v.id})
+        paint(n+19,4+i,7," DEL",colors.red,{kind="op",op="remove_raw",raw=v.id})
+      end
+    end
+  end
+  local half=math.floor(w/2)
+  paint(1,h-3,half," < "..ui.page.."/"..pages,colors.gray,{kind="page",delta=-1})
+  paint(half+1,h-3,w-half," NEXT >",colors.gray,{kind="page",delta=1})
+  paint(1,h-2,w,ui.mode=="pick" and " BACK TO PORTS" or " SAVE CONFIGURATION",colors.green,{kind=ui.mode=="pick" and "back" or "save"})
   return hits
 end
 function M.hit(hits,x,y)

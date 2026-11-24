@@ -116,6 +116,7 @@ local function lines()
   end
   return result
 end
+local typedUI={page=1,mode="list",selected=nil}
 local function draw()
   local w,h=renderer.getSize()
   local function line(y,text,color)
@@ -127,6 +128,9 @@ local function draw()
     frame=frame+1
     hits={}
     local w=wizard.remote
+    if w.typed then
+      hits=dashboard.typed(renderer,w,typedUI); renderer.flush(); return
+    end
     line(2,"REGISTER MACHINE / NODE #"..w.id,colors.cyan)
     line(3,({"|","/","-","\\"})[frame%4+1].." "..(w.phase=="place" and "Place ONE cobblestone in selected port" or w.phase=="remove" and "Remove the marker from detected port" or tostring(w.phase)),colors.yellow)
     for i,r in ipairs(reg.roles) do
@@ -301,7 +305,18 @@ local function monitorInput()
       local ok,w,h=pcall(screen.getSize)
       if ok and type(w)=="number" and type(h)=="number" then
         if wizard.remote then
-          if c>=5 and c<=8 then wizard.command("select",reg.roles[c-4])
+          if wizard.remote.typed then
+            local a=dashboard.hit(hits,b,c)
+            if a then
+              if a.kind=="cancel" then wizard.command("cancel"); typedUI={page=1,mode="list"}
+              elseif a.kind=="save" then wizard.command("save")
+              elseif a.kind=="page" then typedUI.page=math.max(1,typedUI.page+a.delta)
+              elseif a.kind=="back" then typedUI.mode="list"; typedUI.page=1
+              elseif a.kind=="pick" then typedUI.mode="pick"; typedUI.op=a.op; typedUI.raw=a.raw; typedUI.kind=a.resourceKind; typedUI.direction=a.direction; typedUI.page=1
+              elseif a.kind=="device" then wizard.command("typed_op",typedUI.op,{raw=typedUI.raw,kind=typedUI.kind,direction=typedUI.direction,name=a.name}); typedUI.mode="list"; typedUI.page=1
+              elseif a.kind=="op" then wizard.command("typed_op",a.op,{raw=a.raw}) end
+            end
+          elseif c>=5 and c<=8 then wizard.command("select",reg.roles[c-4])
           elseif c==9 then wizard.command("setting","batch",b>w/2 and 1 or -1)
           elseif c==11 then wizard.command("setting","timeout",b>w/2 and 30 or -30)
           elseif c==18 then wizard.command("setting","enabled")
@@ -317,7 +332,7 @@ local function monitorInput()
               local dn=nodes[detail.id]; local dm
               if dn then for _,v in ipairs(dn.machines) do if v.number==detail.number then dm=v; break end end end
               if not dm or clock()-dn.seen>5 then notice="Slave offline"
-              elseif action.kind=="edit" then wizard.start(detail.id,detail.number)
+              elseif action.kind=="edit" then typedUI={page=1,mode="list"}; wizard.start(detail.id,detail.number,true)
               elseif action.kind=="machine_feed" then sendControl(detail.id,"machine_feed",not dm.enabled,detail.number)
               elseif confirmDelete==detail.number then sendControl(detail.id,"delete",nil,detail.number); confirmDelete=nil
               else confirmDelete=detail.number; notice="Pause node feed, drain machine, tap DELETE again" end
@@ -332,7 +347,7 @@ local function monitorInput()
             elseif action.kind=="next" then page=page+1
             elseif action.kind=="update_master" then requestUpdate()
             elseif n and clock()-n.seen<=5 then
-              if action.kind=="register" then wizard.start(id)
+              if action.kind=="register" then typedUI={page=1,mode="list"}; wizard.start(id,nil,true)
               elseif action.kind=="feed" then sendControl(id,"feed",not (n.feedRequested==nil and n.enabled or n.feedRequested))
               elseif action.kind=="update_slave" then
                 if confirmUpdate==id then confirmUpdate=nil; sendControl(id,"update") else confirmUpdate=id; notice="Tap UPDATE SLAVE again to confirm" end
@@ -343,7 +358,7 @@ local function monitorInput()
           selectedNode=math.max(1,selectedNode+(b>w/2 and 1 or -1))
         elseif config.role=="master" and c==5 then
           local id=nodeIds(nodes)[selectedNode]
-          if id and clock()-nodes[id].seen<=5 then wizard.start(id) else notice="No online Slave" end
+          if id and clock()-nodes[id].seen<=5 then typedUI={page=1,mode="list"}; wizard.start(id,nil,true) else notice="No online Slave" end
         elseif c==2 then toggle() elseif c==3 then requestUpdate()
         elseif c==h then page=math.max(1,page+(b>w/2 and 1 or -1)) end
       end

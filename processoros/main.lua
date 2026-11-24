@@ -39,7 +39,7 @@ if config.role=="slave" then print(config.slave_number and string.format("Slave 
 local function clock() return os.epoch("utc")/1000 end
 local function io(name)
   local p=peripheral.wrap(name)
-  if p and p.list and p.pushItems then return p end
+  if p and ((p.list and p.pushItems) or (p.tanks and p.pushFluid)) then return p end
 end
 local engine=core.new(config,states,io,function(s) return store.save("state",s) end,clock)
 local monitor,monitorName,screen,renderer
@@ -183,6 +183,7 @@ local function drained()
   for _,m in ipairs(config.machines) do
     local s=states[m.id] or {}
     if s.pending or s.baseline or s.phase=="fault" then return false end
+    if not core.extraEmpty(m,io) then return false end
     for _,role in ipairs({"machine_input","machine_output"}) do
       local p=m.ports[role]; if type(p)=="string" then p={name=p} end
       local inv=io(p.name); if not inv then return false end
@@ -218,6 +219,7 @@ local function work()
           if not cached then
             local accepted,message,action=control.apply(config,msg,wizard.localSession~=nil or updateRequested or requestedExit~=nil,store.save,function(machine)
               local s=states[machine.id] or {}; if s.pending or s.baseline or s.phase=="fault" then return false end
+              if not core.extraEmpty(machine,io) then return false end
               for _,r in ipairs({"machine_input","machine_output"}) do
                 local p=machine.ports[r]; if type(p)=="string" then p={name=p} end
                 local inv=io(p.name); if not inv then return false end

@@ -100,14 +100,15 @@ function M.details(r,model)
     local p=m.ports[k]; local text=type(p)=="table" and (tostring(p.name)..(p.slot and ":"..p.slot or "")) or tostring(p or "N/A")
     line(6+i," "..k..": "..text,colors.lightGray)
   end
-  line(11," OUTPUT HISTORY (items/min)",colors.cyan)
+  line(11," EXTRA PORTS: "..#(m.connections or {}).." / configure on Slave",colors.cyan)
+  line(12," OUTPUT HISTORY (items/min)",colors.cyan)
   local history=model.history or {}; local max=1
   for _,v in ipairs(history) do max=math.max(max,v) end
-  local maxbars=math.max(0,math.min(5,h-19))
+  local maxbars=math.max(0,math.min(5,h-20))
   for y=1,maxbars do
     local s=""
     for i=math.max(1,#history-w+3),#history do s=s..(history[i]>0 and history[i]/max>=(maxbars-y+1)/maxbars and "#" or " ") end
-    line(11+y," "..s,colors.lime)
+    line(12+y," "..s,colors.lime)
   end
   if m.error then line(h-7," "..m.error,colors.red) end
   button(h-6,m.enabled and " PAUSE MACHINE" or " ENABLE MACHINE","machine_feed",colors.blue)

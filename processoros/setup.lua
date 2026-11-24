@@ -10,7 +10,7 @@ local function empty(p)
   local inv=peripheral.wrap(p.name); assert(inv and inv.list,"Old port offline: "..p.name)
   for slot in pairs(inv.list()) do assert(p.slot and slot~=p.slot,"Drain old working ports first") end
 end
-for _,m in ipairs(cfg.machines or {}) do empty(m.ports.machine_input); empty(m.ports.machine_output) end
+for _,m in ipairs(cfg.machines or {}) do empty(m.ports.machine_input); empty(m.ports.machine_output); assert(core.extraEmpty(m,peripheral.wrap),"Drain additional working ports first") end
 assert(net.open()>0,"No modem")
 local group=cfg.network_group or "factory"
 local master=cfg.master_id
@@ -102,6 +102,54 @@ local function common()
   mainInput=a; mainOutput=b; machines=draft
   return true
 end
+local function chooseResource(kind,label)
+  while true do
+    title(label)
+    local list={}
+    for _,n in ipairs(peripheral.getNames()) do
+      local p=peripheral.wrap(n)
+      if n:match("_%d+$") and p and (kind=="fluid" and p.tanks and p.pushFluid or kind=="item" and p.list and p.pushItems) then list[#list+1]=n end
+    end
+    table.sort(list)
+    for i,n in ipairs(list) do print(i..": "..n) end
+    print("B = cancel"); write("> "); local v=read()
+    if v:lower()=="b" then return end
+    if list[tonumber(v) or 0] then return list[tonumber(v)] end
+  end
+end
+local function editConnections(machine)
+  local list={} for i,c in ipairs(machine.connections or {}) do list[i]=c end
+  while true do
+    title("ADDITIONAL RESOURCE PORTS")
+    for i,c in ipairs(list) do print(i..": "..c.direction.." "..c.kind.." "..c.resource.." x"..c.amount) end
+    print("A = add   D = remove")
+    print("S = accept   B = discard")
+    write("> "); local v=read():lower()
+    if v=="b" then return
+    elseif v=="s" then machine.connections=list; if #list>0 then machine.batch_size=1 end; return
+    elseif v=="d" then write("Connection number> "); local n=tonumber(read()); if n and list[n] then table.remove(list,n) end
+    elseif v=="a" then
+      title("Resource type: I = item, F = fluid")
+      write("> "); local k=read():lower(); local kind=k=="i" and "item" or k=="f" and "fluid"
+      if kind then
+        title("Direction: I = input, O = output")
+        write("> "); local d=read():lower(); local dir=d=="i" and "in" or d=="o" and "out"
+        if dir then
+          local source=chooseResource(kind,dir=="in" and "Select Raw Input" or "Select Machine Output")
+          local destination=source and chooseResource(kind,dir=="in" and "Select Machine Input" or "Select Raw Output")
+          if destination then
+            title("Resource ID (namespace:name)"); write("> "); local resource=read()
+            title(kind=="fluid" and "Amount per operation (mB)" or "Amount per operation (items)")
+            write("> "); local amount=tonumber(read())
+            if resource:match("^[^:]+:[^:]+$") and amount and amount>=1 and amount%1==0 then
+              list[#list+1]={kind=kind,direction=dir,source=source,destination=destination,resource=resource,amount=amount}
+            end
+          end
+        end
+      end
+    end
+  end
+end
 local function addMachine(index)
   local original=index and machines[index]
   if not original and #machines>=32 then print("Maximum 32 machines"); read(); return false end
@@ -128,6 +176,7 @@ local function addMachine(index)
     print("5. Feed: "..(draftMachine.enabled~=false and "ON" or "OFF"))
     print("6. Batch: "..(draftMachine.batch_size or 1))
     print("7. Timeout: "..(draftMachine.timeout or 300).."s")
+    print("8. Extra ports: "..#(draftMachine.connections or {}))
     print("S = accept   B = discard")
     if errorText then printError(errorText) end
     write("> "); local v=read():lower(); errorText=nil
@@ -136,6 +185,7 @@ local function addMachine(index)
     elseif r then
       local p=choose(r,"Select "..label.." "..labels[tonumber(v)],draftMachine.ports[r])
       if p then draftMachine.ports[r]=p end
+    elseif v=="8" then editConnections(draftMachine)
     elseif v=="5" then draftMachine.enabled=draftMachine.enabled==false
     elseif v=="6" or v=="7" then
       title(v=="6" and "Batch size (1-64)" or "Timeout in seconds (1-86400)")

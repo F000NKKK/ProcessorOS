@@ -60,6 +60,12 @@ end
 function M.loadConfig()
   local defaults=dofile("/processoros/config.default.lua")
   local cfg=M.load("config",{})
-  return M.normalizeConfig(cfg,defaults)
+  cfg=M.normalizeConfig(cfg,defaults)
+  local core=dofile("/processoros/core.lua")
+  if cfg.schema_version~=2 then
+    if not M.load("config_pre_v2",nil) then assert(M.save("config_pre_v2",cfg)) end
+    core.migrate(cfg); core.validate(cfg); assert(M.save("config",cfg))
+  else core.migrate(cfg) end
+  return cfg
 end
 return M

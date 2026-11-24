@@ -1,0 +1,1 @@
+return {name="ProcessorOS",enabled=false,poll_seconds=0.1,monitor_scale=0.5,machines={}}

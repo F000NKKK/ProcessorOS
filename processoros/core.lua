@@ -215,12 +215,40 @@ function M.new(config,states,io,save,clock)
   M.validate(config)
   local self={states=states,status={},cursor=0}
   local function persist() assert(save(states)) end
-  local function transfer(st,src,dst,slot,count)
-    st.pending={source=src.name,destination=dst.name,slot=slot,count=count}
-    persist()
+  local function observed(p,kind,identity,slot)
+    local n=0
+    for i,v in pairs(kind=="fluid" and p.tanks() or p.list()) do
+      if (not slot or slot==i) and (kind=="fluid" and v.name or key(v))==identity then n=n+(kind=="fluid" and v.amount or v.count) end
+    end
+    return n
+  end
+  local function journal(st,q)
+    local a,b=assert(io(q.source),"Source offline"),assert(io(q.destination),"Destination offline")
+    q.beforeSource=observed(a,q.kind,q.identity,q.slot)
+    q.beforeDest=observed(b,q.kind,q.identity,q.destSlot)
+    st.pending=q; persist()
+  end
+  local function finish(st,q,n)
+    if q.action=="load" then
+      if n==0 and q.same then st.baseline=nil; st.started=nil; st.phase="idle" end
+      if n>0 then
+        st.staging=nil
+        if not q.same and q.track then st.active=true; st.started=clock(); st.phase="processing" end
+      end
+    elseif q.action=="unload" then
+      st.completed=(st.completed or 0)+n
+      if n==q.originalCount and (q.same or st.active) then st.baseline=nil; st.active=nil; st.phase="idle"; st.started=nil; st.staging=nil end
+    end
+    st.pending=nil; persist()
+  end
+  local function transfer(st,src,dst,slot,count,context)
+    local item=assert(io(src.name).list()[slot],"Source slot disappeared")
+    local q=context or {}
+    q.kind="item"; q.source=src.name; q.destination=dst.name; q.slot=slot; q.destSlot=dst.slot; q.count=count; q.identity=key(item)
+    journal(st,q)
     local n=io(src.name).pushItems(dst.name,slot,count,dst.slot)
     assert(type(n)=="number" and n>=0 and n<=count,"Invalid transfer result")
-    st.pending=nil
+    finish(st,q,n)
     return n
   end
   local function resourceAmount(p,c)
@@ -246,11 +274,11 @@ function M.new(config,states,io,save,clock)
       end
       return 0
     end
-    st.pending={kind="fluid",source=c.source,destination=c.destination,resource=c.resource,count=limit}
-    persist()
+    local q={kind="fluid",source=c.source,destination=c.destination,identity=c.resource,count=limit}
+    journal(st,q)
     local n=src.pushFluid(c.destination,limit,c.resource)
     assert(type(n)=="number" and n>=0 and n<=limit,"Invalid fluid transfer result")
-    st.pending=nil; persist(); return n
+    finish(st,q,n); return n
   end
   local function contents(p,kind)
     local amounts,names={},{}
@@ -465,10 +493,15 @@ function M.new(config,states,io,save,clock)
         local a,b=io(src),io(dst)
         if not a or not b then return false end
         local found=false
+        local fluidEntries={}
         for slot,v in pairs(rows(a,kind)) do
           local n=kind=="fluid" and v.amount or v.count
           if n and n>0 and (not filter or v.name==filter) and (not srcSlot or slot==srcSlot) then
-            entries[#entries+1]={kind=kind,source=src,destination=dst,identity=kind=="fluid" and v.name or key(v),slot=kind=="item" and slot or nil,destSlot=dstSlot,remaining=n}
+            if kind=="fluid" and fluidEntries[v.name] then fluidEntries[v.name].remaining=fluidEntries[v.name].remaining+n
+            else
+              local e={kind=kind,source=src,destination=dst,identity=kind=="fluid" and v.name or key(v),slot=kind=="item" and slot or nil,destSlot=dstSlot,remaining=n}
+              entries[#entries+1]=e; if kind=="fluid" then fluidEntries[v.name]=e end
+            end
             found=true
           end
         end
@@ -528,10 +561,22 @@ function M.new(config,states,io,save,clock)
     end
     st.pending=nil; st.phase="processing"; st.error=nil; persist(); return true
   end
+  local function recoverSingle(st)
+    local q=st.pending
+    if not q or q.batch or not q.identity or q.beforeSource==nil or q.beforeDest==nil then return false end
+    local a,b=io(q.source),io(q.destination)
+    if not a or not b then return false end
+    local moved=q.beforeSource-observed(a,q.kind,q.identity,q.slot)
+    local added=observed(b,q.kind,q.identity,q.destSlot)-q.beforeDest
+    if moved~=added or moved<0 or moved>q.count then return false end
+    st.phase=(st.baseline or st.active) and "processing" or "idle"; st.error=nil
+    finish(st,q,moved)
+    return true
+  end
   local function step(m,load)
     local st=states[m.id] or {phase="idle",completed=0}
     states[m.id]=st
-    if st.pending and not recoverBatch(st) then st.phase="fault"; st.error="Uncertain transfer; inspect ports"; self.status[m.id]="FAULT"; return end
+    if st.pending and not recoverBatch(st) and not recoverSingle(st) then st.phase="fault"; st.error="Uncertain transfer; inspect ports"; self.status[m.id]="FAULT"; return end
     if st.phase=="fault" then return end
     local p={} local inv={}
     for _,r in ipairs(roles) do p[r]=port(m.ports[r]); inv[r]=io(p[r].name); if not inv[r] then self.status[m.id]="OFFLINE "..r; return end end
@@ -552,10 +597,7 @@ function M.new(config,states,io,save,clock)
             self.status[m.id]="UNEXPECTED RESULT"; st.phase="fault"; st.error="Unexpected result: "..v.item.name; persist(); return
           else
             ready=true
-            local n=transfer(st,p.machine_output,p.output,v.slot,v.item.count)
-            st.completed=st.completed+n
-            if n==v.item.count and (same or st.active) then st.baseline=nil; st.active=nil; st.phase="idle"; st.started=nil; st.staging=nil end
-            persist()
+            local n=transfer(st,p.machine_output,p.output,v.slot,v.item.count,{action="unload",same=same,originalCount=v.item.count})
             self.status[m.id]=n>0 and "UNLOADING" or "OUTPUT BLOCKED"
           end
         end
@@ -575,7 +617,7 @@ function M.new(config,states,io,save,clock)
     if not st.staging then
       for _,other in ipairs(config.machines) do
         local os=states[other.id]
-        if other.id~=m.id and os and os.staging then
+        if other.id~=m.id and os and (os.staging or os.batch or os.pending) then
           local op=port(other.ports.input)
           if op.name==p.input.name then self.status[m.id]="WAITING STAGED BATCH"; return end
           for _,a in ipairs(m.connections or {}) do
@@ -609,13 +651,7 @@ function M.new(config,states,io,save,clock)
           if not actual or key(actual)~=st.staging.key then self.status[m.id]="WAITING PRIMARY"; return end
         end
         if same then st.baseline=key(v.item); st.started=clock(); st.phase="processing" end
-        local n=transfer(st,p.input,p.machine_input,v.slot,math.min(v.item.count,m.batch_size or 1))
-        if n==0 and same then st.baseline=nil; st.started=nil; st.phase="idle" end
-        if n>0 then
-          st.staging=nil
-          if not same and #(m.connections or {})>0 then st.active=true; st.started=clock(); st.phase="processing" end
-        end
-        persist()
+        local n=transfer(st,p.input,p.machine_input,v.slot,math.min(v.item.count,m.batch_size or 1),{action="load",same=same,track=#(m.connections or {})>0})
         self.status[m.id]=n>0 and "LOADING" or "INPUT BLOCKED"
         return
       end

@@ -5,7 +5,7 @@ function M.role(s)
   if s=="1" or s=="m" or s=="master" then return "master" end
   if s=="2" or s=="s" or s=="slave" then return "slave" end
 end
-local aliases={s="setup",g="group",p="feed",u="update",q="shell",exit="shell",n="next",b="back",h="help",["?"]="help"}
+local aliases={s="setup",g="group",p="feed",u="update",q="shell",exit="shell",n="next",b="back",h="help",d="diagnostics",["?"]="help"}
 function M.command(reader,writer)
   writer("> ")
   local s=normalize(reader())

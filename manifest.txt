@@ -12,3 +12,4 @@ processoros/wizard.lua
 processoros/console.lua
 processoros/dashboard.lua
 processoros/control.lua
+processoros/diagnostic.lua

@@ -92,3 +92,5 @@ Mixer experimental BATCH mode: local machine M toggles single/batch. Use a dedic
 Master typed editor: REGISTER and EDIT PORTS open a paginated view of raw ports and machine bindings. Add ITEM/FLUID IN/OUT, bind or replace devices, unbind/remove, toggle mode, save. Edits are staged on Slave and validated before persistence. The old marker protocol remains supported.
 
 Recovery journal now covers SINGLE item loading/unloading and auxiliary fluid/item transfers as well as BATCH. Exact matching source/destination deltas restore controller state and counters; ambiguous transfers remain faulted. Recovery assumes exclusive ownership of buffers: if an external device consumes/replenishes stock during a crash, exact-once inference is not generally possible. Legacy journals lacking observations remain manual faults.
+
+Hardware diagnostics: D + Enter on Slave captures a read-only report of physical capabilities, contents, controller states and unresolved transfer journal to /processoros/data/diagnostic. See docs/MINECRAFT_ACCEPTANCE.md for actual in-world acceptance tests; CI only covers emulation.

@@ -5,6 +5,7 @@ local reg=dofile("/processoros/registration.lua")
 local wizardModule=dofile("/processoros/wizard.lua")
 local dashboard=dofile("/processoros/dashboard.lua")
 local control=dofile("/processoros/control.lua")
+local diagnostic=dofile("/processoros/diagnostic.lua")
 local hits,frame,pending,received={},0,{},{}
 local commandCounter=0
 local confirmUpdate=nil
@@ -58,6 +59,7 @@ local function terminalMenu()
     print("S - Configure machines")
     print("G - Rename group")
     print("P - Start / pause feed")
+    print("D - Hardware diagnostics")
   end
   print("U - Update OS")
   print("Q - Exit to shell")
@@ -380,6 +382,13 @@ local function terminalInput()
         print("Draining machines before setup. X + Enter cancels.")
         requestedExit="setup"
       end
+    elseif a=="diagnostics" and config.role=="slave" then
+      local ok,err=pcall(function()
+        local report=diagnostic.collect(config,states,peripheral.wrap,clock)
+        diagnostic.print(report)
+        assert(store.save("diagnostic",report)); print("Saved /processoros/data/diagnostic")
+      end)
+      if not ok then printError(tostring(err)) end
     elseif a=="group" and config.role=="slave" then
       if wizard.localSession or updateRequested then print("Finish registration/update first")
       else

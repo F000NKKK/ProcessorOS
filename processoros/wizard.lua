@@ -16,12 +16,23 @@ function M.new(reg,net,config,states,store,core,clock,drained,registry)
   function self.command(kind,role,value)
     local w=self.remote; if not w then return end
     send(w.id,{kind=kind,role=role,value=value,token=w.token})
-    if kind=="cancel" then self.remote=nil end
+    if kind=="cancel" and w.phase~="remove" then self.remote=nil end
   end
   function self.tick()
     local w=self.localSession
     if not w then return end
-    if clock()-w.last>30 then self.localSession=nil; return end
+    if clock()-w.last>30 then self.localSession=nil; config.feed_hold=nil; return end
+    if w.phase=="draining" then
+      local ok,empty=pcall(drained)
+      if ok and empty then
+        w.quiet=w.quiet or clock()
+        if clock()-w.quiet>=10 then
+          if w.original then w.phase="confirmed" else reg.select(w,reg.roles[1]) end
+          report(w)
+        end
+      else w.quiet=nil end
+      return
+    end
     if w.phase=="baseline" or w.phase=="place" or w.phase=="remove" then
       local ok,err=pcall(function() return reg.observe(w,reg.snapshot()) end)
       if ok then report(w,err) else report(w,tostring(err)) end
@@ -34,7 +45,7 @@ function M.new(reg,net,config,states,store,core,clock,drained,registry)
     end
     local w=self.remote
     if w then
-      if clock()-w.seen>8 then w.error="Slave disconnected" end
+      if clock()-w.seen>8 and w.phase~="saved" and w.phase~="blocked" then w.error="Slave disconnected" end
       if w.phase~="saved" and w.phase~="blocked" then send(w.id,{kind="ping",token=w.token}) end
     end
   end
@@ -71,9 +82,7 @@ function M.new(reg,net,config,states,store,core,clock,drained,registry)
     if not config.master_id or type(msg.token)~="string" then return end
     if msg.kind=="begin" then
       if self.localSession then return end
-      config.enabled=false; assert(store.save("config",config))
-      local ok,empty=pcall(drained)
-      if not ok or not empty then send(sender,{kind="status",token=msg.token,phase="blocked",error="Feed paused; drain machines first and retry"}); return end
+      if config.feed_hold and config.feed_hold~="registration_required" then send(sender,{kind="status",token=msg.token,phase="blocked",error="Controller busy"}); return end
       local w={owner=sender,token=msg.token,ports={},last=clock(),batch=1,timeout=300,enabled=true}
       if msg.number then
         for i,m in ipairs(config.machines) do if m.number==msg.number then
@@ -83,19 +92,22 @@ function M.new(reg,net,config,states,store,core,clock,drained,registry)
         end end
         if not w.original then send(sender,{kind="status",token=msg.token,phase="blocked",error="Machine not found"}); return end
       end
-      self.localSession=w
-      if w.original then w.phase="confirmed" else reg.select(w,reg.roles[1]) end
+      self.localSession=w; config.feed_hold="registration"
+      local ok,empty=pcall(drained)
+      if ok and empty and #config.machines==0 then reg.select(w,reg.roles[1]) else w.phase="draining" end
       report(w)
       return
     end
     local w=self.localSession
     if not w or w.owner~=sender or w.token~=msg.token then return end
     w.last=clock()
-    if msg.kind=="cancel" then self.localSession=nil
+    if msg.kind=="cancel" then
+      if w.phase=="remove" then report(w,"Remove marker before cancelling"); return end
+      self.localSession=nil; config.feed_hold=nil
     elseif msg.kind=="ping" then
       report(w,w.error)
       if w.phase=="saving" then send(sender,{kind="allocate",token=w.token,key=w.machine.id}) end
-    elseif msg.kind=="select" and w.phase~="saving" then
+    elseif msg.kind=="select" and w.phase~="saving" and w.phase~="draining" then
       if w.phase=="remove" then report(w,"Remove current marker first"); return end
       reg.select(w,msg.role); report(w)
     elseif msg.kind=="setting" and w.phase~="saving" then

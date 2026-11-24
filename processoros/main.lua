@@ -30,7 +30,7 @@ local states=store.load("state",{})
 local registry=store.load("registry",{next=1,nodes={}})
 local registered=true
 for _,m in ipairs(config.machines or {}) do if not m.number then registered=false end end
-if config.role=="slave" and not registered then config.enabled=false end
+if config.role=="slave" and (not registered or #config.machines==0 or not config.master_id) then config.feed_hold="registration_required" end
 if config.role=="slave" then print(config.slave_number and string.format("Slave %03d",config.slave_number) or "Slave: waiting for Master") end
 local function clock() return os.epoch("utc")/1000 end
 local function io(name)
@@ -50,6 +50,7 @@ local function terminalMenu()
     print(config.slave_number and string.format("Slave %03d",config.slave_number) or "Waiting for Master")
     print("Group: "..config.name)
     print("Machines: "..#config.machines)
+    print("Feed: "..(config.enabled and (config.feed_hold and "AUTO PAUSED" or "ON") or "OFF"))
     print("S - Configure machines")
     print("G - Rename group")
     print("P - Start / pause feed")
@@ -153,7 +154,7 @@ local function draw()
     local list={}
     for _,id in ipairs(ids) do
       local n=nodes[id]
-      list[#list+1]={id=id,name=n.name,machines=n.machines,enabled=n.enabled,online=clock()-n.seen<=5}
+      list[#list+1]={id=id,name=n.name,machines=n.machines,enabled=n.enabled,feedRequested=n.feedRequested,hold=n.hold,online=clock()-n.seen<=5}
     end
     frame=frame+1
     hits,page=dashboard.draw(renderer,{nodes=list,selected=list[selectedNode],frame=frame,page=page,notice=notice})
@@ -164,7 +165,7 @@ local function draw()
     line(4,id and ("< SELECT: "..nodes[id].name.." >") or "Waiting for Slaves",colors.cyan)
     line(5,"REGISTER MACHINE",colors.lime)
   end
-  line(2,(config.role=="slave" and not registered and "SETUP REQUIRED" or (config.enabled and "PAUSE FEED" or "START FEED")).." | modems "..netCount,colors.lime)
+  line(2,(config.role=="slave" and not registered and "SETUP REQUIRED" or (config.feed_hold and "FEED AUTO PAUSED" or (config.enabled and "PAUSE FEED" or "START FEED"))).." | modems "..netCount,colors.lime)
   line(3,updateRequested and "UPDATE: DRAINING / CANCEL" or "UPDATE OS [LOCAL]",colors.yellow)
   local rows=lines()
   local offset=config.role=="master" and 5 or 3
@@ -231,9 +232,18 @@ local function work()
       if ok and res=="reload" then exitReason="reload"; return end
     end
     for token,p in pairs(pending) do if clock()-p.at>8 then pending[token]=nil; notice="Command ACK timeout" end end
-    if wizard.localSession then wizard.tick() else engine.tick() end
+    if wizard.localSession then
+      if wizard.localSession.phase=="draining" then engine.tick() end
+      wizard.tick()
+    else engine.tick() end
     if requestedExit and not wizard.localSession then
-      exitReason=requestedExit; return
+      if requestedExit=="setup" then
+        local ok,empty=pcall(drained)
+        if ok and empty then
+          drainSince=drainSince or clock()
+          if clock()-drainSince>=10 then exitReason=requestedExit; return end
+        else drainSince=nil end
+      else exitReason=requestedExit; return end
     end
     if updateRequested then
       local ok,empty=pcall(drained)
@@ -259,15 +269,17 @@ local function display()
 end
 local function toggle()
   if wizard.localSession then notice="Registration active"; return end
-  if updateRequested then notice="Cancel update first"; return end
+  if updateRequested or requestedExit then notice="Maintenance active"; return end
   if config.role=="master" and #config.machines==0 then notice="Master is monitor only"; return end
   if not registered or (config.role=="slave" and not config.master_id) then notice="Register machines with Master first"; return end
+  if #config.machines==0 then notice="No registered machines"; return end
   config.enabled=not config.enabled; assert(store.save("config",config))
 end
 local function requestUpdate()
   if wizard.localSession then notice="Registration active"; return end
-  if updateRequested then updateRequested=false; drainSince=nil; notice="Update cancelled; feed paused"; return end
-  config.enabled=false; assert(store.save("config",config))
+  if requestedExit then notice="Configuration pending"; return end
+  if updateRequested then updateRequested=false; drainSince=nil; config.feed_hold=nil; notice="Update cancelled; feed preference restored"; return end
+  config.feed_hold="update"
   updateRequested=true; notice="Drain physical machines before update"
 end
 -- Monitor events and terminal line input have separate owners.
@@ -310,7 +322,7 @@ local function monitorInput()
             elseif action.kind=="update_master" then requestUpdate()
             elseif n and clock()-n.seen<=5 then
               if action.kind=="register" then wizard.start(id)
-              elseif action.kind=="feed" then sendControl(id,"feed",not n.enabled)
+              elseif action.kind=="feed" then sendControl(id,"feed",not (n.feedRequested==nil and n.enabled or n.feedRequested))
               elseif action.kind=="update_slave" then
                 if confirmUpdate==id then confirmUpdate=nil; sendControl(id,"update") else confirmUpdate=id; notice="Tap UPDATE SLAVE again to confirm" end
               end
@@ -331,12 +343,16 @@ local function terminalInput()
   terminalMenu()
   while true do
     local a=console.command(read,write)
+    if requestedExit=="setup" then
+      if a=="cancel" or a=="x" then requestedExit=nil; drainSince=nil; config.feed_hold=nil; print("Setup cancelled; feed preference restored") else print("Draining; X + Enter cancels") end
+    else
     if a=="setup" and config.role=="slave" then
       if wizard.localSession or updateRequested then print("Finish registration/update first")
       elseif not wizard.masterSeen or clock()-wizard.masterSeen>5 then print("Master offline; setup unavailable")
       else
-        config.enabled=false; assert(store.save("config",config))
-        requestedExit="setup"; while true do sleep(0.1) end
+        config.feed_hold="setup"; drainSince=nil
+        print("Draining machines before setup. X + Enter cancels.")
+        requestedExit="setup"
       end
     elseif a=="group" and config.role=="slave" then
       if wizard.localSession or updateRequested then print("Finish registration/update first")
@@ -357,6 +373,7 @@ local function terminalInput()
       if config.role=="slave" then print(wizard.masterSeen and clock()-wizard.masterSeen<=5 and "Master ONLINE" or "Master OFFLINE") end
       if notice~="" then print(notice) end
     elseif a~="" then print("Unknown command. Type H and press Enter.") end
+    end
   end
 end
 local function broadcast()
@@ -399,7 +416,7 @@ if exitReason=="setup" then
 end
 if exitReason=="reload" then os.reboot() end
 if exitReason=="update" then
-  print("Updating local ProcessorOS. Feed remains paused.")
+  print("Updating local ProcessorOS. Feed will resume on successful reboot if enabled.")
   local ok,err=pcall(dofile,"/processoros/update.lua")
-  if not ok then printError("Update failed: "..tostring(err)); print("Feed remains paused. Run update to retry or reboot to restart.") end
+  if not ok then printError("Update failed: "..tostring(err)); print("OS stopped. Run update to retry or reboot to restart.") end
 end

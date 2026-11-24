@@ -71,7 +71,7 @@ function M.new(config,states,io,save,clock)
       end
       return
     end
-    if not config.enabled or m.enabled==false then return end
+    if not config.enabled or config.feed_hold or m.enabled==false then return end
     if same then
       if st.baseline then return end
       for _,v in ipairs(slots(inv.machine_input)) do if allowed(p.machine_input,v.slot) then return end end

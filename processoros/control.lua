@@ -26,7 +26,7 @@ function M.apply(cfg,msg,blocked,save,canRemove)
     end
     return false,"Invalid machine command"
   elseif msg.action=="update" then
-    cfg.enabled=false; assert(save("config",cfg)); return true,"Draining for update","update"
+    cfg.feed_hold="update"; return true,"Draining for update","update"
   end
   return false,"Unknown command"
 end

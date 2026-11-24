@@ -36,6 +36,10 @@ end
 
 function M.save(name, value)
   M.init()
+  if name=="config" then
+    local persisted={} for k,v in pairs(value) do if k~="feed_hold" then persisted[k]=v end end
+    value=persisted
+  end
   return write(fs.combine(root, name), value)
 end
 
@@ -48,6 +52,7 @@ function M.normalizeConfig(cfg,defaults)
   if type(cfg.slave_number)~="number" then cfg.slave_number=nil end
   if type(cfg.master_id)~="number" then cfg.master_id=nil end
   cfg.enabled=cfg.enabled==true
+  cfg.feed_hold=nil
   cfg.poll_seconds=tonumber(cfg.poll_seconds) or 0.1
   cfg.monitor_scale=tonumber(cfg.monitor_scale) or 0.5
   return cfg

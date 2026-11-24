@@ -193,10 +193,10 @@ while true do
         local n=reply.assigned and reply.assigned[m.id]; assert(type(n)=="number" and n>=1 and n%1==0,"Missing machine number"); m.number=n
       end end
       cfg.main_input=mainInput; cfg.main_output=mainOutput
-      cfg.machines=machines; cfg.master_id=master; cfg.enabled=false
+      cfg.machines=machines; cfg.master_id=master
       assert(store.save("config",cfg))
     end)
-    if ok then title("CONFIGURATION SAVED"); print("Feed paused."); return end
+    if ok then title("CONFIGURATION SAVED"); print(cfg.enabled and "Feed resumes after reboot." or "Feed remains OFF."); return end
     printError(tostring(err)); print("Enter to retry"); read()
   end
 end

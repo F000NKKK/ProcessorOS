@@ -46,7 +46,7 @@ function M.draw(r,model)
   local bw=math.floor((w-2)/3)
   if bw>0 then
     button(1,5,bw," REGISTER",{kind="register"},colors.blue)
-    button(bw+2,5,bw,selected and selected.enabled and " PAUSE FEED" or " START FEED",{kind="feed"},colors.green)
+    button(bw+2,5,bw,selected and selected.hold and " AUTO PAUSED" or (selected and selected.enabled and " PAUSE FEED" or " START FEED"),{kind="feed"},colors.green)
     button(2*bw+3,5,bw," UPDATE SLAVE",{kind="update_slave"},colors.brown)
   end
   local l=M.layout(w,h,#rows)

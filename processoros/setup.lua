@@ -30,7 +30,8 @@ print("Synchronizing with Master...")
 request("discover")
 local reg=dofile("/processoros/registration.lua")
 local function title(s)
-  term.clear(); term.setCursorPos(1,1); print("PROCESSOR OS / LOCAL SETUP"); print(s); print("")
+  term.setBackgroundColor(colors.black); term.setTextColor(colors.white); term.clear(); term.setCursorPos(1,1)
+  term.setTextColor(colors.cyan); print("PROCESSOR OS / LOCAL SETUP"); term.setTextColor(colors.white); print(s); print("")
 end
 local function names()
   local list={}
@@ -39,14 +40,17 @@ local function names()
 end
 local function marker(role)
   local w={ports={}}; reg.select(w,role); reg.observe(w,reg.snapshot())
-  title("Place ONE cobblestone in "..role)
-  print("C = cancel scan")
+  local function scanScreen(status)
+    title("Select "..role.." by marker")
+    print(status); print(""); print("C = cancel scan")
+  end
+  scanScreen("Place ONE cobblestone in the inventory.")
   local function scan()
     local previous
     while w.phase~="confirmed" do
       local err=reg.observe(w,reg.snapshot())
       local status=err or (w.phase=="remove" and ("Detected: "..w.candidate.name.."\nRemove cobblestone now") or "Waiting for cobblestone...")
-      if status~=previous then print(status); previous=status end
+      if status~=previous then scanScreen(status); previous=status end
       sleep(0.2)
     end
   end
@@ -74,48 +78,83 @@ local function choose(role,label,default)
 end
 local machines={}
 for i,m in ipairs(cfg.machines) do machines[i]=m end
-local defaultInput,defaultOutput
 local function pname(p) return type(p)=="table" and p.name or p end
-local function newMachine()
-  if #machines>=32 then print("Maximum 32 machines"); read(); return end
-  local a=choose("input","1/4: INPUT - raw material storage",defaultInput); if not a then return end
-  local b=choose("machine_input","2/4: MACHINE INPUT - working inventory"); if not b then return end
-  local c=choose("machine_output","3/4: MACHINE OUTPUT - Enter for same inventory",b); if not c then return end
-  local d=choose("output","4/4: OUTPUT - finished product destination",defaultOutput); if not d then return end
-  local ports={input=a,machine_input=b,machine_output=c,output=d}
-  local labels={"Raw material storage","Machine input","Machine output","Finished product destination"}
+local mainInput=cfg.main_input
+local mainOutput=cfg.main_output
+if #machines>0 then
+  mainInput=mainInput or pname(machines[1].ports.input)
+  mainOutput=mainOutput or pname(machines[1].ports.output)
+end
+local function common()
+  local a=choose("input","Select Main Input - raw material storage",mainInput)
+  if not a then return false end
+  local b=choose("output","Select Main Output - finished product destination",mainOutput)
+  if not b then return false end
+  if a==b then printError("Main Input must differ from Main Output"); read(); return false end
+  local draft={}
+  for i,m in ipairs(machines) do
+    local copy={} for k,v in pairs(m) do copy[k]=v end
+    copy.ports={} for k,v in pairs(m.ports) do copy.ports[k]=v end
+    copy.ports.input=a; copy.ports.output=b; draft[i]=copy
+  end
+  local ok,err=pcall(core.validate,{machines=draft})
+  if not ok then printError(tostring(err)); read(); return false end
+  mainInput=a; mainOutput=b; machines=draft
+  return true
+end
+local function addMachine()
+  if #machines>=32 then print("Maximum 32 machines"); read(); return false end
+  local label="Machine "..(#machines+1)
+  local a=choose("machine_input","Select "..label.." Input")
+  if not a then return false end
+  local b=choose("machine_output","Select "..label.." Output",a)
+  if not b then return false end
   while true do
-    title("Review machine - select a port to change")
-    for i,r in ipairs(reg.roles) do print(i..": "..r.." = "..ports[r]) end
-    print("S = save draft   B = discard")
+    title(label.." / REVIEW")
+    print("Main Input: "..mainInput)
+    print("Main Output: "..mainOutput)
+    print("1. Machine Input: "..a)
+    print("2. Machine Output: "..b)
+    print("")
+    print("S = accept   B = discard")
     write("> "); local v=read():lower()
-    if v=="b" then return end
-    if v=="s" then
-      local key=ports.machine_input.."|"..ports.machine_output
+    if v=="b" then return false
+    elseif v=="1" then a=choose("machine_input","Select "..label.." Input",a) or a
+    elseif v=="2" then b=choose("machine_output","Select "..label.." Output",b) or b
+    elseif v=="s" then
       local draft={} for i,m in ipairs(machines) do draft[i]=m end
-      draft[#draft+1]={id=key,enabled=true,batch_size=1,ports=ports}
+      draft[#draft+1]={id=a.."|"..b,enabled=true,batch_size=1,ports={input=mainInput,output=mainOutput,machine_input=a,machine_output=b}}
       local ok,err=pcall(core.validate,{machines=draft})
-      if ok then machines=draft; defaultInput=ports.input; defaultOutput=ports.output; return end
-      printError(tostring(err)); print("Enter to correct ports"); read()
-    else
-      local i=tonumber(v); local r=i and reg.roles[i]
-      if r then local p=choose(r,labels[i],ports[r]); if p then ports[r]=p end end
+      if ok then machines=draft; return true end
+      printError(tostring(err)); print("Enter to correct"); read()
     end
   end
 end
-if #machines>0 then defaultInput=pname(machines[1].ports.input); defaultOutput=pname(machines[1].ports.output) end
+if not mainInput or not mainOutput then
+  if not common() then return end
+  title("How many machines to add?")
+  print("Enter 1-32, or B to cancel.")
+  write("> "); local n=tonumber(read())
+  if not n or n<1 or n>32-#machines or n%1~=0 then return end
+  for i=1,n do if not addMachine() then break end end
+end
 while true do
-  title("Slave machine configuration")
+  title("CONFIGURATION REVIEW")
   print("Group: "..cfg.name)
-  for i,m in ipairs(machines) do print(i..": "..(m.number and ("Machine "..m.number) or "New").." / "..pname(m.ports.machine_input)) end
-  print("A = add machine")
+  print("Main Input: "..tostring(mainInput or "unset"))
+  print("Main Output: "..tostring(mainOutput or "unset"))
+  print("Machines: "..#machines)
+  local _,height=term.getSize()
+  for i=1,math.min(#machines,math.max(0,height-13)) do local m=machines[i]; print(i..": "..pname(m.ports.machine_input)) end
+  print("A = add machine   I = common ports")
   print("G = rename group")
   print("S = save and synchronize")
   print("Q = discard changes")
   write("> "); local v=read():lower()
   if v=="q" then print("Changes discarded"); return
-  elseif v=="a" then newMachine()
-  elseif v=="g" then write("Group name: "); local n=read(); if n:match("%S") and #n<=60 then cfg.name=n end
+  elseif v=="a" then if mainInput and mainOutput or common() then addMachine() end
+  elseif v=="i" then common()
+  elseif v=="g" then title("Group name"); write("> "); local n=read(); if n:match("%S") and #n<=60 then cfg.name=n end
   elseif v=="s" then
     local ok,err=pcall(function()
       core.validate({machines=machines})
@@ -125,10 +164,11 @@ while true do
       for _,m in ipairs(machines) do if not m.number then
         local n=reply.assigned and reply.assigned[m.id]; assert(type(n)=="number" and n>=1 and n%1==0,"Missing machine number"); m.number=n
       end end
+      cfg.main_input=mainInput; cfg.main_output=mainOutput
       cfg.machines=machines; cfg.master_id=master; cfg.enabled=false
       assert(store.save("config",cfg))
     end)
-    if ok then print("Saved. Feed paused."); return end
+    if ok then title("CONFIGURATION SAVED"); print("Feed paused."); return end
     printError(tostring(err)); print("Enter to retry"); read()
   end
 end

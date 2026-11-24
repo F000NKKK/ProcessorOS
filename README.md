@@ -68,3 +68,5 @@ Slave автоматически получает постоянное имя Sl
 ## Local guided setup
 
 On Slave enter `s` and Enter. `a` adds one machine without replacing existing machines. Each port can be selected by number or `m` (place/remove one cobblestone, `c` cancels scan). Enter accepts the displayed default. For in-place machines such as presses, accept the machine input as machine output. Review all four ports, select 1-4 to correct a port, then `s` saves the draft. Repeat `a` for more machines; shared input/output defaults are remembered. Main menu `s` synchronizes new IDs with Master and saves all drafts. `q` discards unsaved changes. Existing counters are retained. Feed remains paused until manually started.
+
+Local initial setup now selects Main Input and Main Output once, asks for machine count, then selects Machine N Input and Machine N Output. Enter accepts the same working inventory for in-place operations. Each step clears the terminal; marker status is redrawn only on changes. I in the review changes shared ports for every configured machine (explicit action). Existing individual ports are otherwise preserved.

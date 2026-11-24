@@ -135,7 +135,11 @@ local function rawEdit()
 end
 local function editRecipe(b)
   title("RECIPE / "..b.name)
-  print("Resource: "..(b.resource or "UNSET"))
+  print("Resource: "..(b.resource or "AUTO"))
+  print("A = automatic, F = fixed")
+  local mode=ask():lower()
+  if mode=="a" then b.resource=nil; b.amount=nil; b.reusable=false; return true end
+  if mode~="f" then return false end
   local id=ask("Resource ID (Enter = keep)> ")
   if id~="" then if not id:match("^[^:]+:[^:]+$") then return false end; b.resource=id end
   local amount=ask("Amount "..(b.kind=="fluid" and "mB" or "items").." (Enter = keep)> ")
@@ -185,10 +189,10 @@ local function addMachine(index)
   while true do
     title("MACHINE "..tostring(m.number or "NEW").." / PORTS")
     for i,b in ipairs(bindings) do
-      print(i..". "..b.direction:upper().." "..b.kind:upper().." "..b.name..(b.primary and " [MAIN]" or ""))
+      print(i..". "..b.direction:upper().." "..b.kind:upper().." "..b.name..(b.primary and " [MAIN]" or (b.resource and " [FIXED]" or " [AUTO]")))
     end
     print("I = + Add input  O = + Add output")
-    print("D = remove  E = rebind  R = recipe")
+    print("D = remove  E = rebind  R = optional filter")
     print("F = filters  T = timeout  N = feed")
     print("S = accept  B = discard")
     if err then printError(err) end
@@ -201,8 +205,8 @@ local function addMachine(index)
       local i=tonumber(ask("Binding number> "))
       if bindings[i] then for _,r in ipairs(raw) do if r.id==bindings[i].raw then bind(r); break end end end
     elseif v=="r" then
-      title("RECIPE RESOURCES (separate from ports)")
-      for i,b in ipairs(bindings) do if not b.primary then print(i..". "..b.name.." "..(b.resource or "UNSET").." x"..tostring(b.amount or "?")) end end
+      title("OPTIONAL RESOURCE FILTERS")
+      for i,b in ipairs(bindings) do if not b.primary then print(i..". "..b.name.." "..(b.resource or "AUTO").." x"..tostring(b.amount or "?")) end end
       local i=tonumber(ask("Binding number> ")); if bindings[i] and not bindings[i].primary then
         local b=clone(bindings[i]); if editRecipe(b) then bindings[i]=b else err="Invalid resource or amount" end
       end
@@ -214,7 +218,6 @@ local function addMachine(index)
     elseif v=="n" then m.enabled=m.enabled==false
     elseif v=="s" then
       local ok,e=pcall(function()
-        for _,b in ipairs(bindings) do if not b.primary and (not b.resource or not b.amount) then assert(editRecipe(b),"Recipe incomplete") end end
         core.compileBindings(raw,bindings,m)
         if not m.id then m.id=spec(m.ports.machine_input).name.."|"..spec(m.ports.machine_output).name end
         local draft=clone(machines); draft[index or #draft+1]=m; core.validate({machines=draft})

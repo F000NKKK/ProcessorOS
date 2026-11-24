@@ -70,7 +70,7 @@ function M.compileBindings(raw,bindings,m)
       ports[a]=spec(r); ports[z]=spec(b)
     else
       assert(not r.slot and not b.slot,"Slot-specific auxiliary routes not supported")
-      assert(b.resource and b.amount,"Configure recipe for "..b.name)
+      assert((b.resource==nil and b.amount==nil) or (b.resource and b.amount),"Set both resource and amount, or neither")
       connections[#connections+1]={kind=b.kind,direction=b.direction,source=b.direction=="in" and r.name or b.name,destination=b.direction=="in" and b.name or r.name,resource=b.resource,amount=b.amount,reusable=b.reusable}
     end
   end
@@ -117,8 +117,7 @@ function M.validate(config)
       assert(c.direction=="in" or c.direction=="out","Invalid direction")
       assert(type(c.source)=="string" and type(c.destination)=="string" and c.source~=c.destination,"Invalid connection")
       assert(c.source:find("_%d+$") and c.destination:find("_%d+$"),"Invalid wired connection")
-      assert(type(c.resource)=="string" and c.resource:match("^[^:]+:[^:]+$"),"Resource ID required")
-      assert(type(c.amount)=="number" and c.amount%1==0 and c.amount>=1 and c.amount<=(c.kind=="item" and 64 or 1000000),"Invalid resource amount")
+      assert((c.resource==nil and c.amount==nil) or (type(c.resource)=="string" and c.resource:match("^[^:]+:[^:]+$") and type(c.amount)=="number" and c.amount%1==0 and c.amount>=1 and c.amount<=(c.kind=="item" and 64 or 1000000)),"Invalid fixed resource")
       assert(not c.reusable or (c.kind=="item" and c.direction=="in" and c.amount==1),"Reusable tool must be one input item")
       local work=c.direction=="in" and c.destination or c.source
       local raw=c.direction=="in" and c.source or c.destination
@@ -188,7 +187,65 @@ function M.new(config,states,io,save,clock)
     assert(type(n)=="number" and n>=0 and n<=limit,"Invalid fluid transfer result")
     st.pending=nil; persist(); return n
   end
-  local function preflight(m,primary,slot)
+  local function contents(p,kind)
+    local amounts,names={},{}
+    local rows=kind=="fluid" and p.tanks() or p.list()
+    for _,v in pairs(rows) do
+      local n=kind=="fluid" and v.amount or v.count
+      if n and n>0 then amounts[v.name]=(amounts[v.name] or 0)+n end
+    end
+    for name in pairs(amounts) do names[#names+1]=name end
+    table.sort(names)
+    return amounts,names
+  end
+  local function resolved(c,name,amount)
+    local r={} for k,v in pairs(c) do r[k]=v end
+    r.resource=name; r.amount=amount; return r
+  end
+  local function resolve(m,primary,v,load)
+    local result={}
+    local count=0
+    if load then
+      local automatic=false
+      for _,c in ipairs(m.connections or {}) do if c.direction=="in" and not c.resource then automatic=true end end
+      for _,x in ipairs(slots(io(primary.name))) do
+        if allowed(primary,x.slot) then
+          if automatic and key(x.item)~=key(v.item) then return nil,"MIXED PRIMARY BATCH" end
+          count=count+x.item.count
+        end
+      end
+    end
+    for _,c in ipairs(m.connections or {}) do
+      if (load and c.direction=="in") or (not load and c.direction=="out") then
+        if c.resource then result[#result+1]=c
+        else
+          local src,dst=io(c.source),io(c.destination)
+          local method=c.kind=="fluid" and "tanks" or "list"
+          local push=c.kind=="fluid" and "pushFluid" or "pushItems"
+          if not src or not dst or not src[method] or not dst[method] or not src[push] then return nil,"OFFLINE "..c.kind end
+          local a,an=contents(src,c.kind)
+          if load then
+            local b,bn=contents(dst,c.kind)
+            if #an>1 or #bn>1 then return nil,"MIXED "..c.kind:upper() end
+            local name=an[1]
+            if not name then return nil,"WAITING "..c.kind:upper() end
+            if bn[1] and bn[1]~=name then return nil,"WRONG "..c.kind:upper() end
+            local amount=1
+            if c.kind=="fluid" then
+              local share=math.floor(a[name]/math.max(1,count))
+              if share<1 and not b[name] then return nil,"WAITING FLUID" end
+              amount=math.max(share,b[name] or 0)
+            end
+            result[#result+1]=resolved(c,name,amount)
+          else
+            for _,name in ipairs(an) do result[#result+1]=resolved(c,name,a[name]) end
+          end
+        end
+      end
+    end
+    return result
+  end
+  local function preflight(m,primary,slot,connections)
     local needs={}
     local function need(kind,source,resource,amount,onlySlot)
       if amount<=0 then return true end
@@ -200,7 +257,7 @@ function M.new(config,states,io,save,clock)
       return true
     end
     need("item",primary.name,slot.item.name,1,primary.slot)
-    for _,c in ipairs(m.connections or {}) do
+    for _,c in ipairs(connections or {}) do
       local src,dst=io(c.source),io(c.destination)
       local method=c.kind=="fluid" and "tanks" or "list"
       local push=c.kind=="fluid" and "pushFluid" or "pushItems"
@@ -220,8 +277,8 @@ function M.new(config,states,io,save,clock)
     end
     return true
   end
-  local function extra(m,st,load)
-    for _,c in ipairs(m.connections or {}) do
+  local function extra(m,st,load,connections)
+    for _,c in ipairs(connections or {}) do
       local src,dst=io(c.source),io(c.destination)
       local method=c.kind=="fluid" and "tanks" or "list"
       local push=c.kind=="fluid" and "pushFluid" or "pushItems"
@@ -255,7 +312,9 @@ function M.new(config,states,io,save,clock)
     local same=p.machine_input.name==p.machine_output.name and (not p.machine_input.slot or not p.machine_output.slot or p.machine_input.slot==p.machine_output.slot)
     local work=slots(inv.machine_output)
     if not load then
-      extra(m,st,false)
+      local outputs,why=resolve(m,p.input,nil,false)
+      if not outputs then self.status[m.id]=why; return end
+      if not extra(m,st,false,outputs) then return end
       for _,v in ipairs(work) do
         if allowed(p.machine_output,v.slot) then
           if same and (not st.baseline or key(v.item)==st.baseline) then
@@ -293,10 +352,14 @@ function M.new(config,states,io,save,clock)
     for _,v in ipairs(slots(inv.input)) do
       if allowed(p.input,v.slot) and (not st.staging or st.staging.key==key(v.item)) and (not m.primary_filter or m.primary_filter==v.item.name) then
         if #(m.connections or {})>0 then
-          local ok,why=preflight(m,p.input,v)
+          local inputs,why
+          if st.staging and st.staging.inputs then inputs=st.staging.inputs else inputs,why=resolve(m,p.input,v,true) end
+          if not inputs then self.status[m.id]=why; return end
+          local ok; ok,why=preflight(m,p.input,v,inputs)
           if not ok then self.status[m.id]=why; return end
-          if not st.staging then st.staging={key=key(v.item),started=clock()}; persist() end
-          if not extra(m,st,true) then return end
+          if not st.staging then st.staging={key=key(v.item),started=clock(),inputs=inputs}; persist()
+          elseif not st.staging.inputs then st.staging.inputs=inputs; persist() end
+          if not extra(m,st,true,inputs) then return end
           -- A transfer from the same raw inventory can invalidate the original slot.
           local actual=inv.input.list()[v.slot]
           if not actual or key(actual)~=st.staging.key then self.status[m.id]="WAITING PRIMARY"; return end

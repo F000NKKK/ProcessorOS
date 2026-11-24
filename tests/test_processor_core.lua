@@ -25,3 +25,7 @@ a[1].name="sheet"; e.tick(); assert(output[1].count==1 and b[1].name=="iron" and
 b[1].name="sheet"; c[1].name="sheet"; e.tick(); assert(output[1].count==3)
 assert(not a[1] and not b[1] and not c[1])
 print("processor core tests passed")
+
+local conflict={machines={{id="a",number=1,ports={input="input_0",output="output_0",machine_input="work_0",machine_output="work_0"}},{id="b",number=2,ports={input="work_0",output="output_0",machine_input="work_1",machine_output="work_1"}}}}
+local ok,err=pcall(core.validate,conflict)
+assert(not ok and err:find("work_0",1,true) and err:find("Machine 1",1,true) and err:find("Machine 2",1,true))

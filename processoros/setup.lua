@@ -102,12 +102,13 @@ local function common()
   mainInput=a; mainOutput=b; machines=draft
   return true
 end
-local function addMachine()
-  if #machines>=32 then print("Maximum 32 machines"); read(); return false end
-  local label="Machine "..(#machines+1)
-  local a=choose("machine_input","Select "..label.." Input")
+local function addMachine(index)
+  local original=index and machines[index]
+  if not original and #machines>=32 then print("Maximum 32 machines"); read(); return false end
+  local label="Machine "..(original and (original.number or index) or (#machines+1))
+  local a=choose("machine_input","Select "..label.." Input",original and pname(original.ports.machine_input))
   if not a then return false end
-  local b=choose("machine_output","Select "..label.." Output",a)
+  local b=choose("machine_output","Select "..label.." Output",original and pname(original.ports.machine_output) or a)
   if not b then return false end
   while true do
     title(label.." / REVIEW")
@@ -123,7 +124,7 @@ local function addMachine()
     elseif v=="2" then b=choose("machine_output","Select "..label.." Output",b) or b
     elseif v=="s" then
       local draft={} for i,m in ipairs(machines) do draft[i]=m end
-      draft[#draft+1]={id=a.."|"..b,enabled=true,batch_size=1,ports={input=mainInput,output=mainOutput,machine_input=a,machine_output=b}}
+      draft[index or (#draft+1)]={id=original and original.id or a.."|"..b,number=original and original.number,enabled=not original or original.enabled~=false,batch_size=original and original.batch_size or 1,timeout=original and original.timeout,ports={input=original and original.ports.input or mainInput,output=original and original.ports.output or mainOutput,machine_input=a,machine_output=b}}
       local ok,err=pcall(core.validate,{machines=draft})
       if ok then machines=draft; return true end
       printError(tostring(err)); print("Enter to correct"); read()
@@ -145,8 +146,9 @@ while true do
   print("Main Output: "..tostring(mainOutput or "unset"))
   print("Machines: "..#machines)
   local _,height=term.getSize()
-  for i=1,math.min(#machines,math.max(0,height-13)) do local m=machines[i]; print(i..": "..pname(m.ports.machine_input)) end
-  print("A = add machine   I = common ports")
+  for i=1,math.min(#machines,math.max(0,height-14)) do local m=machines[i]; print(i..": "..pname(m.ports.machine_input)) end
+  print("A = add   I = common ports")
+  print("E = edit existing machine")
   print("G = rename group")
   print("S = save and synchronize")
   print("Q = discard changes")
@@ -154,6 +156,10 @@ while true do
   if v=="q" then print("Changes discarded"); return
   elseif v=="a" then if mainInput and mainOutput or common() then addMachine() end
   elseif v=="i" then common()
+  elseif v=="e" then
+    title("Select existing machine to edit")
+    for i,m in ipairs(machines) do print(i..": "..(m.number or "draft").." / "..pname(m.ports.machine_input)) end
+    write("Machine index (B to cancel)> "); local i=tonumber(read()); if i and machines[i] then addMachine(i) end
   elseif v=="g" then title("Group name"); write("> "); local n=read(); if n:match("%S") and #n<=60 then cfg.name=n end
   elseif v=="s" then
     local ok,err=pcall(function()

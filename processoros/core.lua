@@ -7,7 +7,8 @@ local function port(p) if type(p)=="string" then return {name=p} end return p en
 local function allowed(p,s) return not p.slot or p.slot==s end
 function M.validate(config)
   local used, external, ids={},{},{}
-  for _,m in ipairs(config.machines or {}) do
+  for i,m in ipairs(config.machines or {}) do
+    local label=m.number and ("Machine "..m.number) or ("Draft "..i)
     assert(type(m.id)=="string" and not ids[m.id],"Duplicate machine ID")
     ids[m.id]=true
     for _,r in ipairs(roles) do
@@ -15,14 +16,18 @@ function M.validate(config)
       assert(p and type(p.name)=="string" and p.name:find("_%d+$"),"Invalid wired port: "..r)
       assert(not p.slot or (type(p.slot)=="number" and p.slot>=1 and p.slot%1==0),"Invalid slot")
       if r=="machine_input" or r=="machine_output" then
-        assert(not used[p.name] or used[p.name]==m.id,"Shared working inventory")
-        used[p.name]=m.id
-      else external[p.name]=true end
+        local previous=used[p.name]
+        assert(not previous or previous.id==m.id,p.name..": "..label.." "..r.." conflicts with "..(previous and previous.label or "").." "..(previous and previous.role or ""))
+        used[p.name]={id=m.id,label=label,role=r}
+      else external[p.name]={label=label,role=r} end
     end
     assert(port(m.ports.input).name~=port(m.ports.output).name,"Input equals output")
     assert(not m.batch_size or (type(m.batch_size)=="number" and m.batch_size>=1 and m.batch_size<=64 and m.batch_size%1==0),"Invalid batch size")
   end
-  for n in pairs(used) do assert(not external[n],"Working inventory overlaps external port") end
+  for n,u in pairs(used) do
+    local e=external[n]
+    if e then error(n..": "..u.label.." "..u.role.." overlaps "..e.label.." "..e.role,0) end
+  end
 end
 function M.new(config,states,io,save,clock)
   M.validate(config)

@@ -27,3 +27,12 @@ for i=#cfg.raw_ports,1,-1 do if cfg.raw_ports[i].id==fluidId then table.remove(c
 core.compileBindings(cfg.raw_ports,m.bindings,m); core.validate(cfg)
 assert(#m.connections==0 and m.number==17)
 core.syncTopology(cfg); assert(#cfg.raw_ports==2)
+
+-- Replace preserves all bindings, slot, machine identity and route settings.
+local inputId=m.bindings[1].raw
+assert(core.replaceRaw(cfg.raw_ports,cfg.machines,inputId,{name="chest_42",slot=2})==1)
+core.compileBindings(cfg.raw_ports,m.bindings,m); core.validate(cfg)
+assert(m.ports.input.name=="chest_42" and m.ports.input.slot==2 and m.number==17)
+core.syncTopology(cfg); assert(#cfg.raw_ports==2)
+assert(not pcall(core.replaceRaw,cfg.raw_ports,cfg.machines,m.bindings[1].raw,{name="invalid"}))
+assert(m.ports.input.name=="chest_42")

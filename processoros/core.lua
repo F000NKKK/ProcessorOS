@@ -74,6 +74,31 @@ function M.pruneDetached(cfg,present,missing,now,grace)
   return removed
 end
 -- Draft-only removal: the caller must have drained machines before editing.
+function M.replaceRaw(raw,machines,id,replacement)
+  local old,index
+  for i,r in ipairs(raw) do if r.id==id then old=r; index=i; break end end
+  assert(old,"Unknown raw port")
+  local p=port(replacement)
+  assert(p and type(p.name)=="string" and p.name:match("_%d+$"),"Invalid replacement")
+  local newId=portKey(old.kind,old.direction,p)
+  for i,r in ipairs(raw) do
+    assert(i==index or (r.id~=newId and portKey(r.kind,r.direction,r)~=newId),"Replacement already registered")
+  end
+  local count=0
+  for _,m in ipairs(machines) do
+    for _,b in ipairs(m.bindings or {}) do
+      if b.raw==id then
+        assert(b.primary or not p.slot,"Auxiliary route cannot use slot-specific raw port")
+        count=count+1
+      end
+    end
+  end
+  raw[index]={id=newId,kind=old.kind,direction=old.direction,name=p.name,slot=p.slot}
+  for _,m in ipairs(machines) do
+    for _,b in ipairs(m.bindings or {}) do if b.raw==id then b.raw=newId end end
+  end
+  return count
+end
 function M.unbindRaw(machines,id)
   local count=0
   for _,m in ipairs(machines) do

@@ -107,10 +107,30 @@ local function rawEdit()
     title("GROUP / RAW PORTS")
     for i,r in ipairs(draft) do print(i..". "..r.direction:upper().." "..r.kind:upper().." "..r.name..(peripheral.isPresent(r.name) and "" or " [OFFLINE]")) end
     print("I = + Add input   O = + Add output")
-    print("D = remove + unbind   S = accept   B = back")
+    print("R = replace   D = remove + unbind")
+    print("S = accept   B = back")
     local v=ask():lower()
     if v=="b" then return
     elseif v=="s" then raw=draft; machines=draftMachines; return
+    elseif v=="r" then
+      local i=tonumber(ask("Port number to replace> "))
+      local r=draft[i]
+      if r then
+        local p=chooseTyped(r.kind,"Replace "..r.name,r.direction,false)
+        if p then
+          local candidateRaw,candidateMachines=clone(draft),clone(draftMachines)
+          local ok,count=pcall(function()
+            local n=core.replaceRaw(candidateRaw,candidateMachines,r.id,p)
+            local complete={}
+            for _,m in ipairs(candidateMachines) do
+              core.compileBindings(candidateRaw,m.bindings,m); complete[#complete+1]=m
+            end
+            core.validate({machines=complete}); return n
+          end)
+          if ok then draft=candidateRaw; draftMachines=candidateMachines; print("Replaced "..count.." bindings"); read()
+          else printError(tostring(count)); read() end
+        end
+      end
     elseif v=="d" then
       local i=tonumber(ask("Port number> "))
       if draft[i] then
@@ -200,7 +220,7 @@ local function addMachine(index)
       print(i..". "..b.direction:upper().." "..b.kind:upper().." "..b.name..(peripheral.isPresent(b.name) and "" or " [OFFLINE]")..(b.primary and " [MAIN]" or (b.resource and " [FIXED]" or " [AUTO]")))
     end
     print("I = + Add input  O = + Add output")
-    print("D = remove  E = rebind  R = optional filter")
+    print("D = remove  E = replace  R = optional filter")
     print("F = filters  T = timeout  N = feed")
     print("S = accept  B = discard")
     if err then printError(err) end

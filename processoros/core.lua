@@ -16,7 +16,7 @@ function M.migrate(cfg)
   cfg.schema_version=2
   return changed
 end
-function M.extraEmpty(m,io)
+function M.extraEmpty(m,io,allowTools)
   for _,c in ipairs(m.connections or {}) do
     local p=io(c.direction=="out" and c.source or c.destination)
     if not p then return false end
@@ -25,7 +25,9 @@ function M.extraEmpty(m,io)
       for _,v in pairs(p.tanks()) do if v.amount>0 then return false end end
     else
       if not p.list then return false end
-      for _ in pairs(p.list()) do return false end
+      for _,v in pairs(p.list()) do
+        if not (allowTools and c.reusable and v.name==c.resource and v.count==1) then return false end
+      end
     end
   end
   return true
@@ -53,6 +55,7 @@ function M.validate(config)
       assert(c.source:find("_%d+$") and c.destination:find("_%d+$"),"Invalid wired connection")
       assert(type(c.resource)=="string" and c.resource:match("^[^:]+:[^:]+$"),"Resource ID required")
       assert(type(c.amount)=="number" and c.amount%1==0 and c.amount>=1 and c.amount<=(c.kind=="item" and 64 or 1000000),"Invalid resource amount")
+      assert(not c.reusable or (c.kind=="item" and c.direction=="in" and c.amount==1),"Reusable tool must be one input item")
       local work=c.direction=="in" and c.destination or c.source
       local raw=c.direction=="in" and c.source or c.destination
       local previous=used[work]
@@ -70,6 +73,7 @@ function M.validate(config)
       used[work]={id=m.id,label=label,role="extra "..j}
       external[raw]={label=label,role="extra "..j}
     end
+    assert(not m.result_filter or (type(m.result_filter)=="string" and m.result_filter:match("^[^:]+:[^:]+$")),"Invalid result filter")
     assert(not m.primary_filter or (type(m.primary_filter)=="string" and m.primary_filter:match("^[^:]+:[^:]+$")),"Invalid primary filter")
     assert(#(m.connections or {})==0 or (m.batch_size or 1)==1,"Additional resources require batch size 1")
     assert(port(m.ports.input).name~=port(m.ports.output).name,"Input equals output")
@@ -192,26 +196,29 @@ function M.new(config,states,io,save,clock)
         if allowed(p.machine_output,v.slot) then
           if same and (not st.baseline or key(v.item)==st.baseline) then
             if not st.baseline then self.status[m.id]="UNKNOWN ITEM"; return end
+          elseif m.result_filter and v.item.name~=m.result_filter then
+            self.status[m.id]="UNEXPECTED RESULT"; st.phase="fault"; st.error="Unexpected result: "..v.item.name; persist(); return
           else
             local n=transfer(st,p.machine_output,p.output,v.slot,v.item.count)
             st.completed=st.completed+n
-            if same and n==v.item.count then st.baseline=nil; st.phase="idle"; st.started=nil; st.staging=nil end
+            if n==v.item.count and (same or st.active) then st.baseline=nil; st.active=nil; st.phase="idle"; st.started=nil; st.staging=nil end
             persist()
             self.status[m.id]=n>0 and "UNLOADING" or "OUTPUT BLOCKED"
           end
         end
       end
-      if same and st.baseline then
+      if (same and st.baseline) or st.active then
         self.status[m.id]="PROCESSING"
         if clock()-(st.started or clock())>(m.timeout or 300) then st.phase="fault"; st.error="Processing timeout"; persist() end
       end
       return
     end
-    if not config.enabled or config.feed_hold or m.enabled==false then
+    if (not config.enabled or config.feed_hold or m.enabled==false) and not (st.staging and config.feed_hold and config.feed_hold~="registration_required") then
       if st.staging then self.status[m.id]="STAGED / PAUSED" end
       return
     end
     if config.role=="slave" and (not config.master_id or not m.number) then return end
+    if st.active then return end
     if same then
       if st.baseline then return end
       for _,v in ipairs(slots(inv.machine_input)) do if allowed(p.machine_input,v.slot) then return end end
@@ -233,7 +240,10 @@ function M.new(config,states,io,save,clock)
         if same then st.baseline=key(v.item); st.started=clock(); st.phase="processing" end
         local n=transfer(st,p.input,p.machine_input,v.slot,math.min(v.item.count,m.batch_size or 1))
         if n==0 and same then st.baseline=nil; st.started=nil; st.phase="idle" end
-        if n>0 then st.staging=nil end
+        if n>0 then
+          st.staging=nil
+          if not same and #(m.connections or {})>0 then st.active=true; st.started=clock(); st.phase="processing" end
+        end
         persist()
         self.status[m.id]=n>0 and "LOADING" or "INPUT BLOCKED"
         return

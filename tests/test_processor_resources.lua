@@ -35,3 +35,13 @@ local hand=item("hand_0")
 m.connections[2]={kind="item",direction="in",source="raw_0",destination="hand_0",resource="minecraft:iron_ingot",amount=1}
 e.tick(); assert(e.status.old=="WAITING ITEM" and dst.amount==0 and not hand.items[1] and not states.old.staging)
 raw.items[1].count=2; e.tick(); assert(hand.items[1] and depot.items[1] and dst.amount==250 and not states.old.staging)
+
+-- Deployer retains a reusable tool, and permits a reboot-only maintenance drain.
+m.connections={{kind="item",direction="in",source="raw_0",destination="hand_0",resource="minecraft:iron_ingot",amount=1,reusable=true}}
+m.result_filter="minecraft:gold_ingot"
+depot.items[1].name="minecraft:gold_ingot"; dst.amount=0; e.tick()
+assert(hand.items[1] and core.extraEmpty(m,function(n) return inv[n] end,true))
+assert(not core.extraEmpty(m,function(n) return inv[n] end))
+raw.items[1]={name="minecraft:iron_ingot",count=1}; e.tick()
+assert(hand.items[1].count==1 and depot.items[1])
+depot.items[1].name="minecraft:diamond"; e.tick(); assert(states.old.phase=="fault" and depot.items[1].name=="minecraft:diamond")

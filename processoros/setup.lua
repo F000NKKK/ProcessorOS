@@ -4,7 +4,7 @@ local net=dofile("/processoros/network.lua")
 local cfg=store.loadConfig()
 assert(cfg.role=="slave","Only Slave supports local machine setup. Role is fixed in config.")
 local states=store.load("state",{})
-for _,s in pairs(states) do if s.pending or s.baseline or s.staging or s.phase=="fault" then error("Reconcile active machine before changing ports") end end
+for _,s in pairs(states) do if s.pending or s.baseline or s.active or s.staging or s.phase=="fault" then error("Reconcile active machine before changing ports") end end
 local function empty(p)
   if type(p)=="string" then p={name=p} end
   local inv=peripheral.wrap(p.name); assert(inv and inv.list,"Old port offline: "..p.name)
@@ -121,7 +121,7 @@ local function editConnections(machine)
   local list={} for i,c in ipairs(machine.connections or {}) do list[i]=c end
   while true do
     title("ADDITIONAL RESOURCE PORTS")
-    for i,c in ipairs(list) do print(i..": "..c.direction.." "..c.kind.." "..c.resource.." x"..c.amount) end
+    for i,c in ipairs(list) do print(i..": "..c.direction.." "..c.kind.." "..c.resource.." x"..c.amount..(c.reusable and " TOOL" or "")) end
     print("A = add   D = remove")
     print("S = accept   B = discard")
     write("> "); local v=read():lower()
@@ -142,7 +142,11 @@ local function editConnections(machine)
             title(kind=="fluid" and "Amount per operation (mB)" or "Amount per operation (items)")
             write("> "); local amount=tonumber(read())
             if resource:match("^[^:]+:[^:]+$") and amount and amount>=1 and amount%1==0 then
-              list[#list+1]={kind=kind,direction=dir,source=source,destination=destination,resource=resource,amount=amount}
+              local reusable=false
+              if kind=="item" and dir=="in" and amount==1 then
+                title("C = consumable, T = reusable tool"); write("> "); reusable=read():lower()=="t"
+              end
+              list[#list+1]={kind=kind,direction=dir,source=source,destination=destination,resource=resource,amount=amount,reusable=reusable}
             end
           end
         end
@@ -178,6 +182,7 @@ local function addMachine(index)
     print("7. Timeout: "..(draftMachine.timeout or 300).."s")
     print("8. Extra ports: "..#(draftMachine.connections or {}))
     print("9. Primary filter: "..(draftMachine.primary_filter or "ANY"))
+    print("R. Result filter: "..(draftMachine.result_filter or "ANY"))
     print("S = accept   B = discard")
     if errorText then printError(errorText) end
     write("> "); local v=read():lower(); errorText=nil
@@ -187,6 +192,9 @@ local function addMachine(index)
       local p=choose(r,"Select "..label.." "..labels[tonumber(v)],draftMachine.ports[r])
       if p then draftMachine.ports[r]=p end
     elseif v=="8" then editConnections(draftMachine)
+    elseif v=="r" then
+      title("Expected result ID (blank = any)"); write("> "); local id=read()
+      if id=="" then draftMachine.result_filter=nil elseif id:match("^[^:]+:[^:]+$") then draftMachine.result_filter=id else errorText="Invalid item ID" end
     elseif v=="9" then
       title("Primary item ID (blank = any)"); write("> "); local id=read()
       if id=="" then draftMachine.primary_filter=nil elseif id:match("^[^:]+:[^:]+$") then draftMachine.primary_filter=id else errorText="Invalid item ID" end

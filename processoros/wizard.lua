@@ -63,8 +63,7 @@ function M.new(reg,net,config,states,store,core,clock,drained,registry)
       if config.master_id~=sender or config.slave_number~=msg.slaveNumber then
         config.master_id=sender; config.slave_number=msg.slaveNumber
         assert(store.save("config",config))
-        print(string.format("Slave %03d / Master #%d",config.slave_number,sender))
-        print("S: setup | G: group | P: feed | U: update | Q: shell")
+        -- Terminal input owns its cursor. Identity is shown by the menu.
       end
       return
     end

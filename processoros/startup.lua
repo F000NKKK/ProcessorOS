@@ -8,11 +8,23 @@ if not cfg.role then
   print("ProcessorOS: choose role once.")
   print("[1/M] Master")
   print("[2/S] Slave")
-  while not cfg.role do
-    local e,a,b,c=os.pullEvent()
-    if e=="char" and type(a)=="string" then if a:lower()=="m" or a=="1" then cfg.role="master" elseif a:lower()=="s" or a=="2" then cfg.role="slave" end
-    elseif e=="monitor_touch" and screen and a==peripheral.getName(screen) then if c==3 then cfg.role="master" elseif c==5 then cfg.role="slave" end end
+  local console=dofile("/processoros/console.lua")
+  local function chooseTerminal()
+    while not cfg.role do
+      write("Role> ")
+      cfg.role=console.role(read())
+      if not cfg.role then print("Enter 1 or 2, then press Enter.") end
+    end
   end
+  local function chooseMonitor()
+    while not cfg.role do
+      local e,name,x,y=os.pullEvent("monitor_touch")
+      if screen and name==peripheral.getName(screen) then
+        if y==3 then cfg.role="master" elseif y==5 then cfg.role="slave" end
+      end
+    end
+  end
+  if screen then parallel.waitForAny(chooseTerminal,chooseMonitor) else chooseTerminal() end
   cfg.enabled=false
   assert(store.save("config",cfg))
 end

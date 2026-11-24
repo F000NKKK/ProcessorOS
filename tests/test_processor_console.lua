@@ -1,0 +1,11 @@
+local console=dofile("processoros/console.lua")
+assert(console.role("2")=="slave")
+assert(console.role(" S ")=="slave")
+assert(console.role("MASTER")=="master")
+assert(console.role("bad")==nil)
+local prompt
+assert(console.command(function() return " G " end,function(s) prompt=s end)=="group")
+assert(prompt=="> ")
+assert(console.command(function() return "exit" end,function() end)=="shell")
+assert(console.command(function() return "" end,function() end)=="")
+print("console tests passed")

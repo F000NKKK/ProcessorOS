@@ -9,3 +9,4 @@ processoros/update.lua
 processoros/startup.lua
 processoros/registration.lua
 processoros/wizard.lua
+processoros/console.lua

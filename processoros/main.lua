@@ -23,7 +23,7 @@ local engine=core.new(config,states,io,function(s) return store.save("state",s) 
 local monitor,monitorName,screen,renderer
 local rendererModule=dofile("/processoros/renderer.lua")
 local terminal=term.current()
-local terminalDirty=true
+local console=dofile("/processoros/console.lua")
 local requestedExit=nil
 local function terminalMenu()
   terminal.setBackgroundColor(colors.black); terminal.setTextColor(colors.white); terminal.clear(); terminal.setCursorPos(1,1)
@@ -38,7 +38,8 @@ local function terminalMenu()
   end
   print("U - Update OS")
   print("Q - Exit to shell")
-  terminalDirty=false
+  print("Type command, then press Enter.")
+  print("H - Show menu / status")
 end
 local function refreshMonitor(force)
   local names={}
@@ -146,7 +147,7 @@ local function work()
     while #queue>0 do
       local q=table.remove(queue,1)
       local ok,res=pcall(wizard.receive,q[1],q[2],q[3])
-      if not ok then notice=tostring(res); printError(notice) end
+      if not ok then notice=tostring(res) end
       if ok and res=="reload" then exitReason="reload"; return end
     end
     if wizard.localSession then wizard.tick() else engine.tick() end
@@ -169,7 +170,7 @@ local function display()
   while true do
     local ok,err=pcall(function() refreshMonitor(false); if renderer then draw() end end)
     if not ok then
-      if lastError~=tostring(err) then printError("Display: "..tostring(err)); lastError=tostring(err) end
+      if lastError~=tostring(err) then notice="Display: "..tostring(err); lastError=tostring(err) end
       renderer=nil
     else lastError=nil end
     sleep(0.25)
@@ -188,46 +189,58 @@ local function requestUpdate()
   config.enabled=false; assert(store.save("config",config))
   updateRequested=true; notice="Drain physical machines before update"
 end
-local function input()
-  terminalMenu()
+-- Monitor events and terminal line input have separate owners.
+local function monitorInput()
   while true do
     local e,a,b,c=os.pullEvent()
-    if e=="monitor_touch" and monitor and screen and wizard and a==monitorName and type(b)=="number" and type(c)=="number" then
+    if e=="monitor_touch" and monitor and screen and a==monitorName and type(b)=="number" and type(c)=="number" then
       local ok,w,h=pcall(screen.getSize)
       if ok and type(w)=="number" and type(h)=="number" then
-      if wizard.remote then
-        if c>=5 and c<=8 then wizard.command("select",reg.roles[c-4])
-        elseif c==14 then wizard.command("save")
-        elseif c==16 then wizard.command("cancel") end
-      elseif config.role=="master" and c==4 then
-        selectedNode=math.max(1,selectedNode+(b>w/2 and 1 or -1))
-      elseif config.role=="master" and c==5 then
-        local id=nodeIds(nodes)[selectedNode]
-        if id and clock()-nodes[id].seen<=5 then wizard.start(id) else notice="No online Slave" end
-      elseif c==2 then toggle() elseif c==3 then requestUpdate() elseif c==h then page=math.max(1,page+(b>w/2 and 1 or -1)) end
+        if wizard.remote then
+          if c>=5 and c<=8 then wizard.command("select",reg.roles[c-4])
+          elseif c==14 then wizard.command("save")
+          elseif c==16 then wizard.command("cancel") end
+        elseif config.role=="master" and c==4 then
+          selectedNode=math.max(1,selectedNode+(b>w/2 and 1 or -1))
+        elseif config.role=="master" and c==5 then
+          local id=nodeIds(nodes)[selectedNode]
+          if id and clock()-nodes[id].seen<=5 then wizard.start(id) else notice="No online Slave" end
+        elseif c==2 then toggle() elseif c==3 then requestUpdate()
+        elseif c==h then page=math.max(1,page+(b>w/2 and 1 or -1)) end
       end
-    elseif e=="peripheral" or e=="peripheral_detach" or e=="monitor_resize" then
-      renderer=nil
-    elseif e=="char" and type(a)=="string" then
-      a=a:lower()
-      if a=="s" and config.role=="slave" then
-        if wizard.localSession or updateRequested then print("Finish registration/update first")
-        elseif not wizard.masterSeen or clock()-wizard.masterSeen>5 then print("Master offline; setup unavailable")
-        else config.enabled=false; assert(store.save("config",config)); requestedExit="setup" end
-      elseif a=="g" and config.role=="slave" then
-        if wizard.localSession or updateRequested then print("Finish registration/update first")
-        else
-          write("Group name: "); local name=read()
-          if name and name:match("%S") and #name<=60 then config.name=name; assert(store.save("config",config)); terminalMenu() else print("Name must be 1-60 characters") end
-        end
-      elseif a=="q" then
-        if wizard.localSession then print("Cancel registration on Master first")
-        else config.enabled=false; assert(store.save("config",config)); requestedExit="shell" end
-      elseif a=="p" then toggle(); print(config.enabled and "Feed ON" or "Feed PAUSED"); if notice~="" then print(notice) end
-      elseif a=="u" then requestUpdate(); print(notice)
-      elseif a=="n" then page=page+1 elseif a=="b" then page=math.max(1,page-1)
-      elseif a=="h" or a=="?" then terminalMenu() end
-    end
+    elseif e=="peripheral" or e=="peripheral_detach" or e=="monitor_resize" then renderer=nil end
+  end
+end
+local function terminalInput()
+  terminalMenu()
+  while true do
+    local a=console.command(read,write)
+    if a=="setup" and config.role=="slave" then
+      if wizard.localSession or updateRequested then print("Finish registration/update first")
+      elseif not wizard.masterSeen or clock()-wizard.masterSeen>5 then print("Master offline; setup unavailable")
+      else
+        config.enabled=false; assert(store.save("config",config))
+        requestedExit="setup"; while true do sleep(0.1) end
+      end
+    elseif a=="group" and config.role=="slave" then
+      if wizard.localSession or updateRequested then print("Finish registration/update first")
+      else
+        write("Group name: "); local name=read()
+        if name and name:match("%S") and #name<=60 then
+          config.name=name; assert(store.save("config",config)); terminalMenu()
+        else print("Name must be 1-60 characters") end
+      end
+    elseif a=="shell" then
+      if wizard.localSession then print("Cancel registration on Master first")
+      else config.enabled=false; assert(store.save("config",config)); requestedExit="shell"; while true do sleep(0.1) end end
+    elseif a=="feed" then toggle(); print(config.enabled and "Feed ON" or "Feed PAUSED"); if notice~="" then print(notice) end
+    elseif a=="update" then requestUpdate(); print(notice)
+    elseif a=="next" then page=page+1
+    elseif a=="back" then page=math.max(1,page-1)
+    elseif a=="help" then terminalMenu()
+      if config.role=="slave" then print(wizard.masterSeen and clock()-wizard.masterSeen<=5 and "Master ONLINE" or "Master OFFLINE") end
+      if notice~="" then print(notice) end
+    elseif a~="" then print("Unknown command. Type H and press Enter.") end
   end
 end
 local function broadcast()
@@ -260,7 +273,7 @@ local function receive()
     end
   end
 end
-parallel.waitForAny(work,display,input,broadcast,receive)
+parallel.waitForAny(work,display,monitorInput,terminalInput,broadcast,receive)
 if exitReason=="shell" then print("ProcessorOS stopped. Run reboot to restart."); return end
 if exitReason=="setup" then
   terminal.setBackgroundColor(colors.black); terminal.setTextColor(colors.white); terminal.clear(); terminal.setCursorPos(1,1)

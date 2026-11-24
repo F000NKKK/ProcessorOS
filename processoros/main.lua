@@ -125,8 +125,12 @@ local function draw()
     line(2,"REGISTER MACHINE / NODE #"..w.id,colors.cyan)
     line(3,({"|","/","-","\\"})[frame%4+1].." "..(w.phase=="place" and "Place ONE cobblestone in selected port" or w.phase=="remove" and "Remove the marker from detected port" or tostring(w.phase)),colors.yellow)
     for i,r in ipairs(reg.roles) do
-      line(4+i,(w.role==r and "> " or "  ")..r..": "..(w.ports[r] or "NOT REGISTERED"),w.ports[r] and colors.lime or colors.white)
+      local p=w.ports[r]; local name=type(p)=="table" and (p.name..(p.slot and ":"..p.slot or "")) or p
+      line(4+i,(w.role==r and "> " or "  ")..r..": "..(name or "NOT REGISTERED"),p and colors.lime or colors.white)
     end
+    line(9,"< BATCH "..tostring(w.batch or 1).." >",colors.cyan)
+    line(11,"< TIMEOUT "..tostring(w.timeout or 300).."s >",colors.cyan)
+    if h>=18 then line(18,"MACHINE FEED: "..(w.enabled==false and "OFF" or "ON"),colors.lime) end
     if w.candidate then line(10,"Detected: "..w.candidate.name,colors.cyan) end
     local err=type(w.error)=="string" and w.error~="" and w.error~="nil" and w.error or nil
     line(12,err or "Touch any port to register / repeat",err and colors.orange or colors.lightGray)
@@ -275,6 +279,9 @@ local function monitorInput()
       if ok and type(w)=="number" and type(h)=="number" then
         if wizard.remote then
           if c>=5 and c<=8 then wizard.command("select",reg.roles[c-4])
+          elseif c==9 then wizard.command("setting","batch",b>w/2 and 1 or -1)
+          elseif c==11 then wizard.command("setting","timeout",b>w/2 and 30 or -30)
+          elseif c==18 then wizard.command("setting","enabled")
           elseif c==14 then wizard.command("save")
           elseif c==16 then wizard.command("cancel") end
         elseif config.role=="master" and h>=16 and w>=35 then

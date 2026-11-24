@@ -63,7 +63,7 @@ end
 local function choose(role,label,default)
   while true do
     title(label)
-    if default then print("Enter = "..default) end
+    if default then print("Enter = "..(type(default)=="table" and default.name or default)) end
     local list=names()
     for i,n in ipairs(list) do print(i..": "..n) end
     print("M = detect with cobblestone")
@@ -106,28 +106,50 @@ local function addMachine(index)
   local original=index and machines[index]
   if not original and #machines>=32 then print("Maximum 32 machines"); read(); return false end
   local label="Machine "..(original and (original.number or index) or (#machines+1))
-  local a=choose("machine_input","Select "..label.." Input",original and pname(original.ports.machine_input))
-  if not a then return false end
-  local b=choose("machine_output","Select "..label.." Output",original and pname(original.ports.machine_output) or a)
-  if not b then return false end
+  local draftMachine={ports={},enabled=true,batch_size=1,timeout=300}
+  if original then
+    for k,v in pairs(original) do if k~="ports" then draftMachine[k]=v end end
+    for k,v in pairs(original.ports) do draftMachine.ports[k]=v end
+  else
+    local a=choose("machine_input","Select "..label.." Input")
+    if not a then return false end
+    local b=choose("machine_output","Select "..label.." Output",a)
+    if not b then return false end
+    draftMachine.ports={input=mainInput,output=mainOutput,machine_input=a,machine_output=b}
+  end
+  local labels={"Main Input","Machine Input","Machine Output","Main Output"}
+  local errorText
   while true do
-    title(label.." / REVIEW")
-    print("Main Input: "..mainInput)
-    print("Main Output: "..mainOutput)
-    print("1. Machine Input: "..a)
-    print("2. Machine Output: "..b)
-    print("")
+    title(label.." / EDIT")
+    for i,r in ipairs(reg.roles) do
+      local p=draftMachine.ports[r]
+      print(i..". "..labels[i]..": "..tostring(pname(p))..(type(p)=="table" and p.slot and (":"..p.slot) or ""))
+    end
+    print("5. Feed: "..(draftMachine.enabled~=false and "ON" or "OFF"))
+    print("6. Batch: "..(draftMachine.batch_size or 1))
+    print("7. Timeout: "..(draftMachine.timeout or 300).."s")
     print("S = accept   B = discard")
-    write("> "); local v=read():lower()
+    if errorText then printError(errorText) end
+    write("> "); local v=read():lower(); errorText=nil
+    local r=reg.roles[tonumber(v) or 0]
     if v=="b" then return false
-    elseif v=="1" then a=choose("machine_input","Select "..label.." Input",a) or a
-    elseif v=="2" then b=choose("machine_output","Select "..label.." Output",b) or b
+    elseif r then
+      local p=choose(r,"Select "..label.." "..labels[tonumber(v)],draftMachine.ports[r])
+      if p then draftMachine.ports[r]=p end
+    elseif v=="5" then draftMachine.enabled=draftMachine.enabled==false
+    elseif v=="6" or v=="7" then
+      title(v=="6" and "Batch size (1-64)" or "Timeout in seconds (1-86400)")
+      write("> "); local n=tonumber(read())
+      if n and n%1==0 and n>=1 and n<=(v=="6" and 64 or 86400) then
+        if v=="6" then draftMachine.batch_size=n else draftMachine.timeout=n end
+      else errorText="Invalid value" end
     elseif v=="s" then
+      if not original then draftMachine.id=pname(draftMachine.ports.machine_input).."|"..pname(draftMachine.ports.machine_output) end
       local draft={} for i,m in ipairs(machines) do draft[i]=m end
-      draft[index or (#draft+1)]={id=original and original.id or a.."|"..b,number=original and original.number,enabled=not original or original.enabled~=false,batch_size=original and original.batch_size or 1,timeout=original and original.timeout,ports={input=original and original.ports.input or mainInput,output=original and original.ports.output or mainOutput,machine_input=a,machine_output=b}}
+      draft[index or (#draft+1)]=draftMachine
       local ok,err=pcall(core.validate,{machines=draft})
       if ok then machines=draft; return true end
-      printError(tostring(err)); print("Enter to correct"); read()
+      errorText=tostring(err)
     end
   end
 end

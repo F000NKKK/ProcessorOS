@@ -22,6 +22,7 @@ function M.validate(config)
       else external[p.name]={label=label,role=r} end
     end
     assert(port(m.ports.input).name~=port(m.ports.output).name,"Input equals output")
+    assert(not m.timeout or (type(m.timeout)=="number" and m.timeout>=1 and m.timeout<=86400 and m.timeout%1==0),"Invalid timeout")
     assert(not m.batch_size or (type(m.batch_size)=="number" and m.batch_size>=1 and m.batch_size<=64 and m.batch_size%1==0),"Invalid batch size")
   end
   for n,u in pairs(used) do

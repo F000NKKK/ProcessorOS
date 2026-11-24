@@ -7,15 +7,15 @@ function M.new(reg,net,config,states,store,core,clock,drained,registry)
   local function send(id,msg) msg.group=group; rednet.send(id,msg,M.protocol) end
   local function report(w,err)
     w.error=err
-    send(w.owner,{kind="status",token=w.token,phase=w.phase,role=w.role,ports=w.ports,candidate=w.candidate,error=w.error})
+    send(w.owner,{kind="status",token=w.token,phase=w.phase,role=w.role,ports=w.ports,candidate=w.candidate,error=w.error,batch=w.batch,timeout=w.timeout,enabled=w.enabled})
   end
   function self.start(id,number)
     self.remote={id=id,token=tostring(os.getComputerID())..":"..os.epoch("utc"),phase="connecting",ports={},seen=clock()}
     send(id,{kind="begin",token=self.remote.token,number=number})
   end
-  function self.command(kind,role)
+  function self.command(kind,role,value)
     local w=self.remote; if not w then return end
-    send(w.id,{kind=kind,role=role,token=w.token})
+    send(w.id,{kind=kind,role=role,value=value,token=w.token})
     if kind=="cancel" then self.remote=nil end
   end
   function self.tick()
@@ -51,7 +51,7 @@ function M.new(reg,net,config,states,store,core,clock,drained,registry)
       local w=self.remote
       if not w or w.id~=sender or w.token~=msg.token then return end
       if msg.kind=="status" then
-        w.phase=msg.phase; w.role=msg.role; w.ports=msg.ports or {}; w.candidate=msg.candidate; w.error=msg.error; w.seen=clock()
+        w.phase=msg.phase; w.role=msg.role; w.ports=msg.ports or {}; w.candidate=msg.candidate; w.error=msg.error; w.batch=msg.batch; w.timeout=msg.timeout; w.enabled=msg.enabled; w.seen=clock()
       elseif msg.kind=="allocate" and type(msg.key)=="string" then
         local a=net.allocate(registry,sender,{keys={msg.key}})
         if a then assert(store.save("registry",registry)); send(sender,{kind="assigned",token=w.token,key=msg.key,number=a[msg.key]}) end
@@ -74,11 +74,11 @@ function M.new(reg,net,config,states,store,core,clock,drained,registry)
       config.enabled=false; assert(store.save("config",config))
       local ok,empty=pcall(drained)
       if not ok or not empty then send(sender,{kind="status",token=msg.token,phase="blocked",error="Feed paused; drain machines first and retry"}); return end
-      local w={owner=sender,token=msg.token,ports={},last=clock()}
+      local w={owner=sender,token=msg.token,ports={},last=clock(),batch=1,timeout=300,enabled=true}
       if msg.number then
         for i,m in ipairs(config.machines) do if m.number==msg.number then
-          w.editIndex=i; w.original=m
-          for _,r in ipairs(reg.roles) do local p=m.ports[r]; w.ports[r]=type(p)=="table" and p.name or p end
+          w.editIndex=i; w.original=m; w.batch=m.batch_size or 1; w.timeout=m.timeout or 300; w.enabled=m.enabled~=false
+          for _,r in ipairs(reg.roles) do local p=m.ports[r]; w.ports[r]=p end
           break
         end end
         if not w.original then send(sender,{kind="status",token=msg.token,phase="blocked",error="Machine not found"}); return end
@@ -98,11 +98,17 @@ function M.new(reg,net,config,states,store,core,clock,drained,registry)
     elseif msg.kind=="select" and w.phase~="saving" then
       if w.phase=="remove" then report(w,"Remove current marker first"); return end
       reg.select(w,msg.role); report(w)
+    elseif msg.kind=="setting" and w.phase~="saving" then
+      if msg.role=="batch" and (msg.value==1 or msg.value==-1) then w.batch=math.max(1,math.min(64,w.batch+msg.value))
+      elseif msg.role=="timeout" and (msg.value==30 or msg.value==-30) then w.timeout=math.max(1,math.min(86400,w.timeout+msg.value))
+      elseif msg.role=="enabled" then w.enabled=not w.enabled end
+      report(w,w.error)
     elseif msg.kind=="save" and w.phase~="saving" then
       if w.phase~="confirmed" then report(w,"Confirm marker removal first"); return end
       for _,r in ipairs(reg.roles) do if not w.ports[r] then report(w,"Register all four ports"); return end end
-      local key=w.ports.machine_input.."|"..w.ports.machine_output
-      local machine={id=w.original and w.original.id or key,ports=w.ports,enabled=w.original==nil or w.original.enabled~=false,batch_size=w.original and w.original.batch_size or 1,timeout=w.original and w.original.timeout}
+      local function name(p) return type(p)=="table" and p.name or p end
+      local key=name(w.ports.machine_input).."|"..name(w.ports.machine_output)
+      local machine={id=w.original and w.original.id or key,ports=w.ports,enabled=w.enabled,batch_size=w.batch,timeout=w.timeout}
       local draft={} for i,m in ipairs(config.machines) do draft[i]=m end
       local replace
       for i,m in ipairs(draft) do if m.id==key then replace=i end end

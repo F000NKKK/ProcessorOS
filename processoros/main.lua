@@ -9,10 +9,34 @@ local function io(name)
   if p and p.list and p.pushItems then return p end
 end
 local engine=core.new(config,states,io,function(s) return store.save("state",s) end,clock)
-local monitor=peripheral.find("monitor")
-local screen=monitor or term.current()
-if monitor then monitor.setTextScale(config.monitor_scale or 0.5) end
-local renderer=dofile("/processoros/renderer.lua").create(screen)
+local monitor,monitorName,screen,renderer
+local rendererModule=dofile("/processoros/renderer.lua")
+local terminal=term.current()
+local function refreshMonitor(force)
+  local names={}
+  for _,name in ipairs(peripheral.getNames()) do
+    if peripheral.hasType(name,"monitor") then names[#names+1]=name end
+  end
+  table.sort(names)
+  local chosen=config.monitor
+  if not chosen or chosen=="auto" then
+    chosen=nil
+    for _,name in ipairs(names) do if name==monitorName then chosen=name; break end end
+    chosen=chosen or names[1]
+  end
+  local candidate=chosen and peripheral.wrap(chosen)
+  if not candidate or not candidate.getSize then chosen=nil; candidate=nil end
+  if force or chosen~=monitorName or not renderer then
+    if candidate then
+      local ok=pcall(candidate.setTextScale,config.monitor_scale or 0.5)
+      if not ok then candidate=nil; chosen=nil end
+    end
+    monitor,monitorName=candidate,chosen
+    screen=monitor or terminal
+    renderer=rendererModule.create(screen)
+  end
+end
+refreshMonitor(true)
 local nodes,page,updateRequested,exitReason={},1,false,nil
 local netCount=0
 local notice=""
@@ -82,7 +106,15 @@ local function work()
   end
 end
 local function display()
-  while true do local ok,err=pcall(draw); if not ok then printError("Display: "..tostring(err)) end; sleep(0.25) end
+  local lastError
+  while true do
+    local ok,err=pcall(function() refreshMonitor(false); draw() end)
+    if not ok then
+      if lastError~=tostring(err) then printError("Display: "..tostring(err)); lastError=tostring(err) end
+      renderer=nil
+    else lastError=nil end
+    sleep(0.25)
+  end
 end
 local function toggle()
   if updateRequested then notice="Cancel update first"; return end
@@ -96,11 +128,15 @@ end
 local function input()
   while true do
     local e,a,b,c=os.pullEvent()
-    if e=="monitor_touch" and monitor and a==peripheral.getName(monitor) then
-      local w,h=screen.getSize()
+    if e=="monitor_touch" and monitor and a==monitorName then
+      local ok,w,h=pcall(screen.getSize)
+      if ok then
       if c==2 then toggle() elseif c==3 then requestUpdate() elseif c==h then page=math.max(1,page+(b>w/2 and 1 or -1)) end
+      end
+    elseif e=="peripheral" or e=="peripheral_detach" or e=="monitor_resize" then
+      renderer=nil
     elseif e=="char" then
-      if a=="p" then toggle() elseif a=="u" then requestUpdate() elseif a=="n" then page=page+1 elseif a=="b" then page=math.max(1,page-1) end
+      if a=="m" and #config.machines==0 then config.role="master"; assert(store.save("config",config)); notice="Master mode enabled" elseif a=="p" then toggle() elseif a=="u" then requestUpdate() elseif a=="n" then page=page+1 elseif a=="b" then page=math.max(1,page-1) end
     end
   end
 end

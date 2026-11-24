@@ -1,1 +1,1 @@
-return {name="ProcessorOS",role="slave",network_group="factory",enabled=false,poll_seconds=0.1,monitor_scale=0.5,machines={}}
+return {name="ProcessorOS",role="slave",network_group="factory",enabled=false,poll_seconds=0.1,monitor="auto",monitor_scale=0.5,machines={}}

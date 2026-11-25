@@ -100,7 +100,18 @@ if not initialOk then printError("Monitor initialization: "..tostring(initialErr
 local nodes,page,updateRequested,exitReason={},1,false,nil
 local netCount=0
 local notice=""
-local function localPacket() return net.packet(config,states,engine.status) end
+local updateProgress=store.load("update_progress",nil)
+local remoteUpdates={}
+local updateView=false
+local function publishProgress(phase,n,total,detail)
+  updateProgress={phase=phase,n=n,total=total,detail=detail,at=clock()}
+  assert(store.save("update_progress",updateProgress))
+  if config.master_id and config.role=="slave" then
+    pcall(rednet.send,config.master_id,{kind="update_progress",group=config.network_group or "factory",progress=updateProgress},control.protocol)
+  end
+end
+if updateProgress and updateProgress.phase=="installed" then publishProgress("complete",1,1) end
+local function localPacket() local p=net.packet(config,states,engine.status); p.updateProgress=updateProgress; return p end
 local function lines()
   local result={}
   local function add(t,c) result[#result+1]={t,c or colors.white} end
@@ -130,6 +141,11 @@ local function draw()
   end
   renderer.setBackgroundColor(colors.black); renderer.clear()
   line(1,"PROCESSOR OS / "..(config.role or "slave"):upper()..(config.slave_number and string.format(" %03d",config.slave_number) or ""),colors.cyan)
+  if updateView or updateRequested then
+    local list={{name=config.role=="master" and "Master" or config.name,progress=updateProgress}}
+    for id,v in pairs(remoteUpdates) do list[#list+1]={name=nodes[id] and nodes[id].name or ("Slave #"..id),progress=v} end
+    hits=dashboard.updates(renderer,list); renderer.flush(); return
+  end
   if wizard and wizard.remote then
     frame=frame+1
     hits={}
@@ -214,7 +230,8 @@ local function sendControl(id,action,enabled,number)
   commandCounter=commandCounter+1
   local token=tostring(os.getComputerID())..":"..os.epoch("utc")..":"..commandCounter
   local msg={group=config.network_group or "factory",token=token,action=action,enabled=enabled,number=number}
-  pending[token]={id=id,at=clock()}
+  pending[token]={id=id,at=clock(),action=action}
+  if action=="update" then remoteUpdates[id]={phase="requested",n=0,total=1}; updateView=true end
   local ok,sent=pcall(rednet.send,id,msg,control.protocol)
   if not ok or not sent then pending[token]=nil; notice="Command not sent" else notice="Command sent; awaiting ACK" end
 end
@@ -227,9 +244,11 @@ local function work()
         if q[3]~=control.protocol then return wizard.receive(q[1],q[2],q[3]) end
         local sender,msg=q[1],q[2]
         if config.role=="master" then
-          if type(msg)=="table" and msg.kind=="ack" and msg.group==(config.network_group or "factory") and type(msg.token)=="string" then
+          if type(msg)=="table" and msg.kind=="update_progress" and msg.group==(config.network_group or "factory") and nodes[sender] and type(msg.progress)=="table" then
+            remoteUpdates[sender]=msg.progress
+          elseif type(msg)=="table" and msg.kind=="ack" and msg.group==(config.network_group or "factory") and type(msg.token)=="string" then
             local p=pending[msg.token]
-            if p and p.id==sender then pending[msg.token]=nil; notice=(msg.ok and "ACK: " or "REJECTED: ")..tostring(msg.message) end
+            if p and p.id==sender then if p.action=="update" and not msg.ok then remoteUpdates[sender]={phase="failed",detail=tostring(msg.message),n=0,total=1} end; pending[msg.token]=nil; notice=(msg.ok and "ACK: " or "REJECTED: ")..tostring(msg.message) end
           end
         elseif control.authorized(config,sender,msg) then
           local cached=received[msg.token]
@@ -246,7 +265,7 @@ local function work()
             end)
             cached={kind="ack",group=config.network_group or "factory",token=msg.token,ok=accepted,message=message}
             received[msg.token]=cached
-            if action=="update" then updateRequested=true; drainSince=nil elseif action=="reload" then requestedExit="reload" end
+            if action=="update" then updateRequested=true; publishProgress("requested",0,1) elseif action=="reload" then requestedExit="reload" end
           end
           rednet.send(sender,cached,control.protocol)
         end
@@ -272,14 +291,7 @@ local function work()
         else drainSince=nil end
       else exitReason=requestedExit; return end
     end
-    if updateRequested then
-      local ok,empty=pcall(drained)
-      if ok and empty then
-        drainSince=drainSince or clock()
-        -- Separate-port mechanisms may hold items internally. Require a quiet window.
-        if clock()-drainSince>=10 then exitReason="update"; return end
-      else drainSince=nil end
-    end
+    if updateRequested then exitReason="update"; return end
     sleep(math.max(0.05,config.poll_seconds or 0.1))
   end
 end
@@ -305,9 +317,8 @@ end
 local function requestUpdate()
   if wizard.localSession then notice="Registration active"; return end
   if requestedExit then notice="Configuration pending"; return end
-  if updateRequested then updateRequested=false; drainSince=nil; releaseHold(); notice="Update cancelled; feed preference restored"; return end
-  config.feed_hold="update"
-  updateRequested=true; notice="Drain physical machines before update"
+  if updateRequested then return end
+  updateRequested=true; updateView=true; publishProgress("requested",0,1); notice="Update requested"
 end
 -- Monitor events and terminal line input have separate owners.
 local function monitorInput()
@@ -316,7 +327,10 @@ local function monitorInput()
     if e=="monitor_touch" and monitor and screen and a==monitorName and type(b)=="number" and type(c)=="number" then
       local ok,w,h=pcall(screen.getSize)
       if ok and type(w)=="number" and type(h)=="number" then
-        if wizard.remote then
+        if updateView or updateRequested then
+          local a=dashboard.hit(hits,b,c)
+          if a and a.kind=="update_back" and not updateRequested then updateView=false end
+        elseif wizard.remote then
           if wizard.remote.typed then
             local a=dashboard.hit(hits,b,c)
             if a then
@@ -446,7 +460,7 @@ local function receive()
     elseif config.role=="master" and sender~=os.getComputerID() then
       local group=config.network_group or "factory"
       if protocol==net.protocol then if net.accept(nodes,sender,msg,group,clock()) then
-        local n=nodes[sender]; sample(sender,n.machines,clock()); analytics.observe(sender,n.machines,n.enabled,clock())
+        local n=nodes[sender]; if n.updateProgress and remoteUpdates[sender] then remoteUpdates[sender]=n.updateProgress end; sample(sender,n.machines,clock()); analytics.observe(sender,n.machines,n.enabled,clock())
       end
       elseif protocol==net.registration and type(msg)=="table" and msg.group==group and type(msg.nonce)=="string" then
         if msg.kind=="discover" then rednet.send(sender,{kind="discover_ack",group=group,nonce=msg.nonce},net.registration)
@@ -468,11 +482,20 @@ if exitReason=="setup" then
   terminal.setBackgroundColor(colors.black); terminal.setTextColor(colors.white); terminal.clear(); terminal.setCursorPos(1,1)
   local ok,err=pcall(dofile,"/processoros/setup.lua")
   if not ok then printError(tostring(err)) end
-  print("Press Enter to restart ProcessorOS"); read(); os.reboot()
+  return "reload"
 end
-if exitReason=="reload" then os.reboot() end
+if exitReason=="reload" then return "reload" end
 if exitReason=="update" then
-  print("Updating local ProcessorOS. Feed will resume on successful reboot if enabled.")
-  local ok,err=pcall(dofile,"/processoros/update.lua")
-  if not ok then printError("Update failed: "..tostring(err)); print("OS stopped. Run update to retry or reboot to restart.") end
+  local function progress(phase,n,total,detail)
+    publishProgress(phase,n,total,detail)
+    if renderer then pcall(draw) end
+  end
+  local function checkpoint()
+    assert(store.save("state",states)); assert(store.save("analytics",analytics.data))
+    publishProgress("checkpoint",1,1)
+  end
+  checkpoint()
+  local ok,err=pcall(function() return assert(loadfile("/processoros/update.lua"))({soft=true,progress=progress,checkpoint=checkpoint}) end)
+  if not ok then publishProgress("failed",0,1,tostring(err)); printError(tostring(err)) end
+  return "reload"
 end

@@ -32,7 +32,10 @@ local function trace(err)
   if debug and debug.traceback then return debug.traceback(tostring(err),2) end
   return tostring(err)
 end
-local ok,err=xpcall(function() dofile("/processoros/main.lua") end,trace)
+local ok,err
+repeat
+  ok,err=xpcall(function() return dofile("/processoros/main.lua") end,trace)
+until not ok or err~="reload"
 if not ok then
   printError("ProcessorOS startup failed: "..tostring(err))
   pcall(function()

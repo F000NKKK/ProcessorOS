@@ -70,7 +70,7 @@ function M.new(saved)
     total=total+offline
     return {rate=online and dt>0 and items*60/dt or 0,fluidRate=online and dt>0 and fluid*60/dt or 0,
       utilization=observed>0 and (s.seconds.busy or 0)/observed or nil,
-      availability=total>0 and math.max(0,observed-(s.seconds.fault or 0)-(s.seconds.offline or 0))/total or nil,
+      availability=total>0 and math.max(0,observed-(s.seconds.fault or 0))/total or nil,
       seconds=s.seconds,points=points,kind=online and l.kind or "offline",items=s.items or 0,fluid=s.fluid or 0,coverage=dt}
   end
   function self.groups(nodes,now,window)

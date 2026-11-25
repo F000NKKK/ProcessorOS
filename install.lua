@@ -1,4 +1,7 @@
 -- ProcessorOS installer. Stage and validate every Lua file before replacing code.
+local opts=... or {}
+if type(opts)~="table" then opts={} end
+local function progress(phase,n,total,detail) if opts.progress then opts.progress(phase,n,total,detail) end end
 local BASE="https://raw.githubusercontent.com/F000NKKK/ProcessorOS/master/"
 local HOME="/processoros"
 local stage=HOME.."/.installing"
@@ -15,7 +18,15 @@ end
 if not fs.exists(HOME) then fs.makeDir(HOME) end
 if fs.exists(stage) then fs.delete(stage) end
 fs.makeDir(stage)
-for _,name in ipairs(files) do print("Downloading "..name); write(stage.."/"..name,get("processoros/"..name)) end
+for i,name in ipairs(files) do
+  progress("download",i-1,#files,name)
+  if not opts.progress then print("Downloading "..name) end
+  write(stage.."/"..name,get("processoros/"..name))
+  progress("download",i,#files,name)
+end
+progress("validated",#files,#files)
+if opts.checkpoint then opts.checkpoint() end
+progress("switch",0,#files)
 -- Preserve legacy startup and all data. Never automatically import an active job from another controller.
 if fs.exists("/startup.lua") and not fs.exists(HOME.."/previous_startup.lua") then fs.copy("/startup.lua",HOME.."/previous_startup.lua") end
 local backup=HOME.."/.previous"
@@ -23,10 +34,11 @@ if fs.exists(backup) then fs.delete(backup) end
 fs.makeDir(backup)
 for _,name in ipairs(files) do if fs.exists(HOME.."/"..name) then fs.copy(HOME.."/"..name,backup.."/"..name) end end
 local ok,err=pcall(function()
-  for _,name in ipairs(files) do
+  for i,name in ipairs(files) do
     local dest=HOME.."/"..name
     if fs.exists(dest) then fs.delete(dest) end
     fs.move(stage.."/"..name,dest)
+    progress("switch",i,#files,name)
   end
   write("/startup.lua",'dofile("/processoros/startup.lua")\n')
   write("/update",'dofile("/processoros/update.lua")\n')
@@ -41,5 +53,7 @@ if not ok then
   error(err)
 end
 fs.delete(stage)
+progress("installed",#files,#files)
+if opts.soft then return true end
 print("Installed. Use /processoros/setup.lua to configure before enabling feed.")
 os.reboot()

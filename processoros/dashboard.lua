@@ -188,7 +188,7 @@ function M.analytics(r,groups,ui,now)
   line(1,1,w," PROCESSOR OS / PRODUCTION ANALYTICS",colors.cyan,colors.gray)
   line(1,2,w,string.format(" %.1f items/min | %.1f mB/min | %d/%d online",rate,fluid,online,count),colors.lime)
   local half=math.floor(w/2)
-  line(1,3,half," WINDOW "..ui.window/60.." min",colors.white,colors.blue,{kind="analytics_window"})
+  line(1,3,half," WINDOW "..(ui.window/60).." min",colors.white,colors.blue,{kind="analytics_window"})
   line(half+1,3,w-half," GRAPH "..ui.metric:upper(),colors.white,colors.blue,{kind="analytics_metric"})
   local cap=math.max(1,math.floor((h-7)/5)); local pages=math.max(1,math.ceil(#groups/cap)); ui.page=math.min(ui.page,pages)
   for i=1,cap do
@@ -218,6 +218,28 @@ function M.analytics(r,groups,ui,now)
   line(half+1,h-1,w-half," NEXT >",colors.white,colors.gray,{kind="analytics_page",delta=1})
   line(1,h,w," < BACK",colors.white,colors.gray,{kind="analytics_back"})
   return hits
+end
+function M.updates(r,list)
+  local w,h=r.getSize()
+  r.setBackgroundColor(colors.black); r.clear()
+  local function line(y,s,color)
+    if y>h then return end
+    r.setCursorPos(1,y); r.setTextColor(color or colors.white); r.write(clip(s,w))
+  end
+  line(1," PROCESSOR OS / UPDATE CENTER",colors.cyan)
+  for i,v in ipairs(list) do
+    local y=3+(i-1)*3
+    if y+2<h then
+      local p=v.progress or {}; local ratio=math.max(0,math.min(1,(tonumber(p.n) or 0)/math.max(1,tonumber(p.total) or 1)))
+      local fraction=p.phase=="download" and ratio*0.8 or (p.phase=="switch" and 0.85+ratio*0.14 or (p.phase=="complete" and 1 or (p.phase=="installed" and 0.99 or (p.phase=="checkpoint" or p.phase=="validated") and 0.8 or 0)))
+      local width=math.max(1,w-9); local n=math.floor(width*fraction)
+      line(y,v.name.." / "..tostring(p.phase or "idle"),p.phase=="failed" and colors.red or colors.white)
+      line(y+1,"["..string.rep("#",n)..string.rep("-",width-n).."] "..math.floor(fraction*100).."%",colors.lime)
+      line(y+2,tostring(p.detail or ""),colors.lightGray)
+    end
+  end
+  line(h," < BACK",colors.cyan)
+  return {{x=1,y=h,w=w,action={kind="update_back"}}}
 end
 function M.hit(hits,x,y)
   for _,v in ipairs(hits or {}) do if y==v.y and x>=v.x and x<v.x+v.w then return v.action end end

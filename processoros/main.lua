@@ -48,11 +48,13 @@ local function io(name)
   if p and ((p.list and p.pushItems) or (p.tanks and p.pushFluid)) then return p end
 end
 local engine=core.new(config,states,io,function(s) return store.save("state",s) end,clock)
-local purge=purgeModule.new(config,states,io,store.save,clock,store.load("purge",nil))
+local purge=purgeModule.new(config,states,peripheral.wrap,store.save,clock,store.load("purge",nil))
 local function purging() return purge.job and purge.job.phase=="running" end
 if purging() then config.enabled=false end
 local purgeView=false
 local confirmPurge=nil
+local remotePurges={}
+local purgePage=1
 local monitor,monitorName,screen,renderer
 local rendererModule=dofile("/processoros/renderer.lua")
 local terminal=term.current()
@@ -71,6 +73,8 @@ local function terminalMenu()
     print("F - Start / pause feed")
     print("D - Hardware diagnostics")
     print("P - Purge / return all resources to ME")
+    print("PURGE RETURN - Set ME fluid return")
+    print("PURGE STATUS - Show evacuation state")
   end
   print("U - Update OS")
   print("Q - Exit to shell")
@@ -156,9 +160,9 @@ local function draw()
   if purgeView or purging() then
     local rows={}
     if config.role=="slave" then rows[1]={name=config.name,purge=purge.job} else
-      for _,id in ipairs(nodeIds(nodes)) do local n=nodes[id]; if n.purge then rows[#rows+1]={name=n.name,purge=n.purge} end end
+      for _,id in ipairs(nodeIds(nodes)) do local n=nodes[id]; rows[#rows+1]={name=n.name,purge=remotePurges[id] or n.purge or {phase="idle"},online=clock()-n.seen<=5} end
     end
-    hits=dashboard.purge(renderer,rows); renderer.flush(); return
+    hits,purgePage=dashboard.purge(renderer,rows,{page=purgePage,confirm=confirmPurge and (confirmPurge=="all" and "ALL SLAVES" or (nodes[confirmPurge] and nodes[confirmPurge].name or config.name)),notice=notice,master=config.role=="master"}); renderer.flush(); return
   end
   if updateView or updateRequested then
     local list={{name=config.role=="master" and "Master" or config.name,progress=updateProgress}}
@@ -217,11 +221,12 @@ local function draw()
     local ids=nodeIds(nodes); selectedNode=math.max(1,math.min(selectedNode,#ids)); local id=ids[selectedNode]
     line(4,id and ("< SELECT: "..nodes[id].name.." >") or "Waiting for Slaves",colors.cyan)
     line(5,"REGISTER MACHINE",colors.lime)
+    if h>=8 then line(6,"PURGE MENU",colors.orange) end
   end
   line(2,(config.role=="slave" and not registered and "SETUP REQUIRED" or (config.feed_hold and "FEED AUTO PAUSED" or (config.enabled and "PAUSE FEED" or "START FEED"))).." | modems "..netCount,colors.lime)
   line(3,updateRequested and "UPDATE: DRAINING / CANCEL" or "UPDATE OS [LOCAL]",colors.yellow)
   local rows=lines()
-  local offset=config.role=="master" and 5 or 3
+  local offset=config.role=="master" and (h>=8 and 6 or 5) or 3
   local count=math.max(1,h-offset-2)
   local pages=math.max(1,math.ceil(#rows/count)); page=math.min(page,pages)
   for j=1,count do local r=rows[(page-1)*count+j]; if r then line(offset+j,r[1],r[2]) end end
@@ -250,9 +255,10 @@ local function sendControl(id,action,enabled,number)
   local token=tostring(os.getComputerID())..":"..os.epoch("utc")..":"..commandCounter
   local msg={group=config.network_group or "factory",token=token,action=action,enabled=enabled,number=number}
   pending[token]={id=id,at=clock(),action=action}
+  if action=="purge" then remotePurges[id]={phase="requested",blocked={}} end
   if action=="update" then remoteUpdates[id]={phase="requested",n=0,total=1}; updateView=true end
   local ok,sent=pcall(rednet.send,id,msg,control.protocol)
-  if not ok or not sent then pending[token]=nil; notice="Command not sent" else notice="Command sent; awaiting ACK" end
+  if not ok or not sent then pending[token]=nil; if action=="purge" then remotePurges[id]={phase="failed",blocked={"Command not sent"}} end; notice="Command not sent" else notice="Command sent; awaiting ACK" end
 end
 local missingPorts={}
 local function work()
@@ -267,12 +273,12 @@ local function work()
             remoteUpdates[sender]=msg.progress
           elseif type(msg)=="table" and msg.kind=="ack" and msg.group==(config.network_group or "factory") and type(msg.token)=="string" then
             local p=pending[msg.token]
-            if p and p.id==sender then if p.action=="update" and not msg.ok then remoteUpdates[sender]={phase="failed",detail=tostring(msg.message),n=0,total=1} end; pending[msg.token]=nil; notice=(msg.ok and "ACK: " or "REJECTED: ")..tostring(msg.message) end
+            if p and p.id==sender then if p.action=="purge" then remotePurges[sender]={phase=msg.ok and "accepted" or "rejected",blocked={tostring(msg.message)}} end; if p.action=="update" and not msg.ok then remoteUpdates[sender]={phase="failed",detail=tostring(msg.message),n=0,total=1} end; pending[msg.token]=nil; notice=(msg.ok and "ACK: " or "REJECTED: ")..tostring(msg.message) end
           end
         elseif control.authorized(config,sender,msg) then
           local cached=received[msg.token]
           if not cached then
-            local accepted,message,action=control.apply(config,msg,wizard.localSession~=nil or updateRequested or requestedExit~=nil or purging(),store.save,function(machine)
+            local accepted,message,action=control.apply(config,msg,wizard.localSession~=nil or updateRequested or requestedExit~=nil or (purging() and msg.action~="update" and msg.action~="purge"),store.save,function(machine)
               local s=states[machine.id] or {}; if s.pending or s.baseline or s.active or s.staging or s.phase=="fault" then return false end
               if not core.extraEmpty(machine,io) then return false end
               for _,r in ipairs({"machine_input","machine_output"}) do
@@ -293,7 +299,7 @@ local function work()
       if not ok then notice=tostring(res) end
       if ok and res=="reload" then exitReason="reload"; return end
     end
-    for token,p in pairs(pending) do if clock()-p.at>8 then pending[token]=nil; notice="Command ACK timeout" end end
+    for token,p in pairs(pending) do if clock()-p.at>8 then pending[token]=nil; if p.action=="purge" then remotePurges[p.id]={phase="failed",blocked={"Command ACK timeout"}} end; notice="Command ACK timeout" end end
     if config.role=="slave" and not purging() and not wizard.localSession and not requestedExit and not updateRequested then
       local removed=core.pruneDetached(config,peripheral.isPresent,missingPorts,clock(),10)
       if #removed>0 then assert(store.save("config",config)); notice="Removed offline unused ports: "..table.concat(removed,", ") end
@@ -340,7 +346,6 @@ local function toggle()
   config.enabled=not config.enabled; assert(store.save("config",config))
 end
 local function requestUpdate()
-  if purging() then notice="Purge active"; return end
   if wizard.localSession then notice="Registration active"; return end
   if requestedExit then notice="Configuration pending"; return end
   if updateRequested then return end
@@ -354,7 +359,21 @@ local function monitorInput()
       local ok,w,h=pcall(screen.getSize)
       if ok and type(w)=="number" and type(h)=="number" then
         if purgeView or purging() then
-          local a=dashboard.hit(hits,b,c); if a and a.kind=="purge_back" then purgeView=false end
+          local a=dashboard.hit(hits,b,c)
+          if a then
+            if a.kind=="purge_back" then purgeView=false; confirmPurge=nil
+            elseif a.kind=="purge_page" then purgePage=math.max(1,purgePage+a.delta)
+            elseif a.kind=="purge_confirm" and confirmPurge then
+              local target=confirmPurge; confirmPurge=nil
+              if target=="all" then for nid,v in pairs(nodes) do if clock()-v.seen<=5 then sendControl(nid,"purge") end end
+              elseif nodes[target] and clock()-nodes[target].seen<=5 then sendControl(target,"purge")
+              else notice="Slave offline" end
+            elseif a.kind=="purge_cancel" then confirmPurge=nil; purgeView=false
+            elseif a.kind=="purge_choose" then
+              local id=nodeIds(nodes)[selectedNode]
+              confirmPurge=a.all and "all" or id
+            end
+          end
         elseif updateView or updateRequested then
           local a=dashboard.hit(hits,b,c)
           if a and a.kind=="update_back" and not updateRequested then updateView=false end
@@ -380,15 +399,12 @@ local function monitorInput()
           local action=dashboard.hit(hits,b,c)
           if action then
             local ids=nodeIds(nodes); local id=ids[selectedNode]; local n=id and nodes[id]
-            if action.kind=="purge_view" then purgeView=true
+            if action.kind=="purge_view" then purgeView=true; confirmPurge=nil; purgePage=1
             elseif action.kind=="purge_all" or action.kind=="purge_slave" then
               local target=action.kind=="purge_all" and "all" or id
-              if target and confirmPurge==target then
-                confirmPurge=nil
-                if target=="all" then for nid,v in pairs(nodes) do if clock()-v.seen<=5 then sendControl(nid,"purge") end end
-                elseif n and clock()-n.seen<=5 then sendControl(id,"purge") end
-                purgeView=true
-              else confirmPurge=target; notice="Cancel AE2 jobs first. Tap PURGE again to confirm." end
+              if target and (target=="all" or (n and clock()-n.seen<=5)) then
+                confirmPurge=target; purgeView=true; purgePage=1; notice=""
+              else notice="No online Slave" end
             elseif action.kind=="analytics" then analyticsView={page=1,window=60,metric="items"}; detail=nil
             elseif action.kind=="analytics_resources" and analyticsView then analyticsView.resources=not analyticsView.resources; analyticsView.ranking=false; analyticsView.page=1
             elseif action.kind=="analytics_ranking" and analyticsView then analyticsView.ranking=not analyticsView.ranking; analyticsView.resources=false; analyticsView.page=1
@@ -424,6 +440,8 @@ local function monitorInput()
               end
             else notice="No online Slave" end
           end
+        elseif config.role=="master" and c==6 and h>=8 then
+          purgeView=true; confirmPurge=nil; purgePage=1
         elseif config.role=="master" and c==4 then
           selectedNode=math.max(1,selectedNode+(b>w/2 and 1 or -1))
         elseif config.role=="master" and c==5 then
@@ -442,8 +460,18 @@ local function terminalInput()
     if requestedExit=="setup" then
       if a=="cancel" or a=="x" then requestedExit=nil; drainSince=nil; releaseHold(); print("Setup cancelled; feed preference restored") else print("Draining; X + Enter cancels") end
     else
-    if a=="purge" and config.role=="slave" then
-      if wizard.localSession or updateRequested or requestedExit or purging() then print("Maintenance active") else
+    if a=="purge status" or (a=="purge" and purging()) then
+      local j=purge.job; if j then print(j.phase..": "..j.items.." items / "..j.fluid.." mB"); for _,e in ipairs(j.blocked or {}) do print(e) end else print("No local purge") end
+    elseif a=="purge return" and config.role=="slave" then
+      if updateRequested or wizard.localSession or requestedExit then print("Maintenance active") else
+        local choices={}
+        for _,name in ipairs(peripheral.getNames()) do local v=peripheral.wrap(name); if v and (v.tanks or v.pullFluid) then choices[#choices+1]=name end end
+        table.sort(choices); for i,name in ipairs(choices) do print(i..") "..name) end
+        write("ME fluid return (number or name, blank cancels)> "); local v=read(); local name=choices[tonumber(v)] or v
+        if name and name~="" then local ok,msg=purge.setReturn(name); print(msg) end
+      end
+    elseif a=="purge" and config.role=="slave" then
+      if wizard.localSession or updateRequested or requestedExit then print("Maintenance active") else
         print("Cancel AE2 crafting jobs and stop external input first. Return ALL configured resources? Type YES.")
         if read()=="YES" then local ok,msg=purge.start(); print(msg); if ok then purgeView=true end end
       end
@@ -508,7 +536,7 @@ local function receive()
     elseif config.role=="master" and sender~=os.getComputerID() then
       local group=config.network_group or "factory"
       if protocol==net.protocol then if net.accept(nodes,sender,msg,group,clock()) then
-        local n=nodes[sender]; if n.updateProgress and remoteUpdates[sender] then remoteUpdates[sender]=n.updateProgress end; sample(sender,n.machines,clock()); analytics.observe(sender,n.machines,n.enabled,clock())
+        local n=nodes[sender]; if n.purge and remotePurges[sender] and (remotePurges[sender].phase=="accepted" or n.purge.phase=="running") then remotePurges[sender]=nil end; if n.updateProgress and remoteUpdates[sender] then remoteUpdates[sender]=n.updateProgress end; sample(sender,n.machines,clock()); analytics.observe(sender,n.machines,n.enabled,clock())
       end
       elseif protocol==net.registration and type(msg)=="table" and msg.group==group and type(msg.nonce)=="string" then
         if msg.kind=="discover" then rednet.send(sender,{kind="discover_ack",group=group,nonce=msg.nonce},net.registration)

@@ -26,3 +26,17 @@ p.tick(); now=4; p.tick()
 assert(p.job.phase=="complete" and st.m.completed==10 and not st.m.pending and not cfg.enabled)
 assert(p.job.items==5 and p.job.fluid==500)
 print("purge tests passed")
+
+-- An already-running purge can add its fluid return without restarting or touching production.
+local cfg2={enabled=true,machines=cfg.machines}
+tank.stock=5; spout.stock=495; returnTank.stock=0
+local job2=M.new(cfg2,{},function(n) return inv[n] end,function() return true end,function() return now end)
+assert(job2.start()); job2.tick(); assert(job2.job.phase=="running" and #job2.job.blocked>0)
+assert(not job2.setReturn("spout_0"))
+-- Simulate a read-only source and destination-driven extraction.
+spout.pushFluid=nil
+returnTank.pullFluid=function(n,count) local v=inv[n]; local k=math.min(v.stock,count); v.stock=v.stock-k; returnTank.stock=returnTank.stock+k; return k end
+assert(job2.setReturn("return_0")); job2.tick()
+assert(returnTank.stock==500 and spout.stock==0 and tank.stock==0)
+job2.tick(); now=now+4; job2.tick(); assert(job2.job.phase=="complete")
+print("live return and pull-only purge tests passed")

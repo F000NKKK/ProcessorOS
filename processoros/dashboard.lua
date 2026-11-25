@@ -40,7 +40,8 @@ function M.draw(r,model)
   paint(1,1,w," PROCESSOR OS / MASTER",colors.cyan,colors.gray)
   local pulse=({"o","O","o","."})[model.frame%4+1]
   paint(1,2,w,string.format(" %s NETWORK %d/%d  |  MACHINES %d  |  ACTIVE %d  |  FAULT %d",pulse,online,#model.nodes,total,running,faults),faults>0 and colors.orange or colors.lime)
-  paint(1,3,w," Completed items: "..done,colors.lightGray)
+  paint(1,3,w-14," Completed items: "..done,colors.lightGray)
+  button(w-13,3,14," ANALYTICS",{kind="analytics"},colors.blue)
   local selected=model.selected
   button(1,4,math.max(1,w-2),selected and (" < "..selected.name.." >  "..(selected.online and "ONLINE" or "OFFLINE")) or " Waiting for Slave...",{kind="node"},colors.gray)
   local bw=math.floor((w-2)/3)
@@ -102,6 +103,10 @@ function M.details(r,model)
   end
   line(11," PORTS: "..#(m.connections or {}).." extra | Fluid: "..tostring(m.fluidCompleted or 0).." mB",colors.cyan)
   line(12," OUTPUT HISTORY (items/min)",colors.cyan)
+  if model.metrics and h>=23 then
+    local a=model.metrics
+    line(h-8,string.format(" Busy %s | %.1f mB/min",a.utilization and string.format("%.0f%%",100*a.utilization) or "N/A",a.fluidRate),colors.lightGray)
+  end
   local history=model.history or {}; local max=1
   for _,v in ipairs(history) do max=math.max(max,v) end
   local maxbars=math.max(0,math.min(5,h-20))
@@ -167,6 +172,51 @@ function M.typed(r,session,ui)
   paint(1,h-3,half," < "..ui.page.."/"..pages,colors.gray,{kind="page",delta=-1})
   paint(half+1,h-3,w-half," NEXT >",colors.gray,{kind="page",delta=1})
   paint(1,h-2,w,ui.mode=="pick" and " BACK TO PORTS" or " SAVE CONFIGURATION",colors.green,{kind=ui.mode=="pick" and "back" or "save"})
+  return hits
+end
+function M.analytics(r,groups,ui,now)
+  local w,h=r.getSize(); local hits={}
+  local function line(x,y,n,s,fg,bg,action)
+    if y<1 or y>h or n<1 or x>w then return end
+    n=math.min(n,w-x+1); s=clip(s,n)
+    r.setCursorPos(x,y); r.setTextColor(fg or colors.white); r.setBackgroundColor(bg or colors.black); r.write(s..string.rep(" ",n-#s))
+    if action then hits[#hits+1]={x=x,y=y,w=n,action=action} end
+  end
+  r.setBackgroundColor(colors.black); r.clear()
+  local rate,fluid,online,count=0,0,0,0
+  for _,g in ipairs(groups) do rate=rate+g.rate; fluid=fluid+g.fluidRate; online=online+g.online; count=count+g.count end
+  line(1,1,w," PROCESSOR OS / PRODUCTION ANALYTICS",colors.cyan,colors.gray)
+  line(1,2,w,string.format(" %.1f items/min | %.1f mB/min | %d/%d online",rate,fluid,online,count),colors.lime)
+  local half=math.floor(w/2)
+  line(1,3,half," WINDOW "..ui.window/60.." min",colors.white,colors.blue,{kind="analytics_window"})
+  line(half+1,3,w-half," GRAPH "..ui.metric:upper(),colors.white,colors.blue,{kind="analytics_metric"})
+  local cap=math.max(1,math.floor((h-7)/5)); local pages=math.max(1,math.ceil(#groups/cap)); ui.page=math.min(ui.page,pages)
+  for i=1,cap do
+    local g=groups[(ui.page-1)*cap+i]
+    if g then
+      local y=4+(i-1)*5
+      local function pct(v) return v and string.format("%.0f%%",100*v) or "N/A" end
+      line(1,y,w," "..g.name.." | "..g.online.."/"..g.count.." online",colors.cyan,colors.gray)
+      line(1,y+1,w,string.format(" %.1f items/m | %.1f mB/m | Busy %s",g.rate,g.fluidRate,pct(g.utilization)))
+      line(1,y+2,w,string.format(" Avail %s | Fault %d | Block %d | Wait %d",pct(g.availability),g.counts.fault or 0,g.counts.blocked or 0,g.counts.waiting or 0),colors.lightGray)
+      local bins,max={},0
+      local n=math.max(1,w-2)
+      local start=math.floor((now-ui.window)/10)*10
+      for _,p in ipairs(g.points) do
+        if p.at>=start then
+          local j=math.min(n,math.max(1,math.floor((p.at-start)/ui.window*n)+1))
+          bins[j]=(bins[j] or 0)+(p[ui.metric] or 0); max=math.max(max,bins[j])
+        end
+      end
+      local graph=""
+      for j=1,n do local v=bins[j]; graph=graph..(not v and " " or (v==0 and "." or ("123456789"):sub(math.max(1,math.ceil(v/max*9)),math.max(1,math.ceil(v/max*9))))) end
+      line(1,y+3,w," "..graph,colors.lime)
+    end
+  end
+  line(1,h-2,w," Sampled state; graph 1-9 = relative production",colors.lightGray)
+  line(1,h-1,half," < "..ui.page.."/"..pages,colors.white,colors.gray,{kind="analytics_page",delta=-1})
+  line(half+1,h-1,w-half," NEXT >",colors.white,colors.gray,{kind="analytics_page",delta=1})
+  line(1,h,w," < BACK",colors.white,colors.gray,{kind="analytics_back"})
   return hits
 end
 function M.hit(hits,x,y)

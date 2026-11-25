@@ -4,6 +4,7 @@ local net=dofile("/processoros/network.lua")
 local reg=dofile("/processoros/registration.lua")
 local wizardModule=dofile("/processoros/wizard.lua")
 local dashboard=dofile("/processoros/dashboard.lua")
+local analyticsModule=dofile("/processoros/analytics.lua")
 local control=dofile("/processoros/control.lua")
 local diagnostic=dofile("/processoros/diagnostic.lua")
 local hits,frame,pending,received={},0,{},{}
@@ -27,6 +28,9 @@ local selectedNode=1
 local queue={}
 local function nodeIds(nodes) local ids={} for id in pairs(nodes) do ids[#ids+1]=id end table.sort(ids); return ids end
 local config=store.loadConfig()
+local analytics=analyticsModule.new(store.load("analytics",{}))
+local analyticsView=nil
+local lastAnalyticsSave=0
 local states=store.load("state",{})
 local registry=store.load("registry",{next=1,nodes={}})
 local registered=true
@@ -151,12 +155,16 @@ local function draw()
     renderer.flush(); return
   end
   if config.role=="master" and h>=16 and w>=35 then
+    if analyticsView then
+      hits=dashboard.analytics(renderer,analytics.groups(nodes,clock(),analyticsView.window),analyticsView,clock()); renderer.flush(); return
+    end
     if detail then
       local n=nodes[detail.id]; local machine
       if n then for _,v in ipairs(n.machines) do if v.number==detail.number then machine=v; break end end end
       if machine then
         local s=history[tostring(detail.id)..":"..detail.number] or {}
-        hits=dashboard.details(renderer,{machine=machine,node={name=n.name,online=clock()-n.seen<=5},history=s.values,rate=s.rate,notice=notice})
+        local metrics=analytics.machine(detail.id,machine,clock(),60)
+        hits=dashboard.details(renderer,{machine=machine,node={name=n.name,online=clock()-n.seen<=5},history=s.values,rate=metrics.rate,metrics=metrics,notice=notice})
         renderer.flush(function() sleep(0) end); return
       else detail=nil end
     end
@@ -330,7 +338,12 @@ local function monitorInput()
           local action=dashboard.hit(hits,b,c)
           if action then
             local ids=nodeIds(nodes); local id=ids[selectedNode]; local n=id and nodes[id]
-            if action.kind=="details" then if action.number then detail={id=action.node,number=action.number}; confirmDelete=nil end
+            if action.kind=="analytics" then analyticsView={page=1,window=60,metric="items"}; detail=nil
+            elseif action.kind=="analytics_back" then analyticsView=nil
+            elseif action.kind=="analytics_page" and analyticsView then analyticsView.page=math.max(1,analyticsView.page+action.delta)
+            elseif action.kind=="analytics_window" and analyticsView then analyticsView.window=analyticsView.window==60 and 300 or (analyticsView.window==300 and 3600 or 60)
+            elseif action.kind=="analytics_metric" and analyticsView then analyticsView.metric=analyticsView.metric=="items" and "fluid" or "items"
+            elseif action.kind=="details" then if action.number then detail={id=action.node,number=action.number}; confirmDelete=nil end
             elseif action.kind=="close" then detail=nil; confirmDelete=nil
             elseif detail and (action.kind=="edit" or action.kind=="delete" or action.kind=="machine_feed") then
               local dn=nodes[detail.id]; local dm
@@ -416,6 +429,10 @@ end
 local function broadcast()
   while true do
     netCount=net.open()
+    if config.role=="master" and clock()-lastAnalyticsSave>=30 then
+      lastAnalyticsSave=clock(); analytics.prune(lastAnalyticsSave)
+      local ok,err=pcall(store.save,"analytics",analytics.data); if not ok or not err then notice="Analytics save failed" end
+    end
     if netCount>0 then pcall(rednet.broadcast,localPacket(),net.protocol); pcall(wizard.heartbeat) end
     sleep(1)
   end
@@ -428,7 +445,9 @@ local function receive()
       if #queue<128 then queue[#queue+1]={sender,msg,protocol} end
     elseif config.role=="master" and sender~=os.getComputerID() then
       local group=config.network_group or "factory"
-      if protocol==net.protocol then if net.accept(nodes,sender,msg,group,clock()) then sample(sender,nodes[sender].machines,clock()) end
+      if protocol==net.protocol then if net.accept(nodes,sender,msg,group,clock()) then
+        local n=nodes[sender]; sample(sender,n.machines,clock()); analytics.observe(sender,n.machines,n.enabled,clock())
+      end
       elseif protocol==net.registration and type(msg)=="table" and msg.group==group and type(msg.nonce)=="string" then
         if msg.kind=="discover" then rednet.send(sender,{kind="discover_ack",group=group,nonce=msg.nonce},net.registration)
         elseif msg.kind=="allocate" then

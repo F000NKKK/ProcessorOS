@@ -33,6 +33,7 @@ local backup=HOME.."/.previous"
 if fs.exists(backup) then fs.delete(backup) end
 fs.makeDir(backup)
 for _,name in ipairs(files) do if fs.exists(HOME.."/"..name) then fs.copy(HOME.."/"..name,backup.."/"..name) end end
+write(HOME.."/.pending_boot",table.concat(files,"\n"))
 local ok,err=pcall(function()
   for i,name in ipairs(files) do
     local dest=HOME.."/"..name
@@ -45,11 +46,12 @@ local ok,err=pcall(function()
 end)
 if not ok then
   for _,name in ipairs(files) do
+    if fs.exists(HOME.."/"..name) then fs.delete(HOME.."/"..name) end
     if fs.exists(backup.."/"..name) then
-      if fs.exists(HOME.."/"..name) then fs.delete(HOME.."/"..name) end
       fs.copy(backup.."/"..name,HOME.."/"..name)
     end
   end
+  if fs.exists(HOME.."/.pending_boot") then fs.delete(HOME.."/.pending_boot") end
   error(err)
 end
 fs.delete(stage)

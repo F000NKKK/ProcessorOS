@@ -36,6 +36,21 @@ local ok,err
 repeat
   ok,err=xpcall(function() return dofile("/processoros/main.lua") end,trace)
 until not ok or err~="reload"
+if not ok and fs.exists("/processoros/.pending_boot") then
+  local restored,why=pcall(function()
+    local h=assert(fs.open("/processoros/.pending_boot","r")); local list=h.readAll(); h.close()
+    for name in list:gmatch("[^\n]+") do
+      assert(name:match("^[%w_.-]+%.lua$"),"Invalid backup entry")
+      local dst="/processoros/"..name; local src="/processoros/.previous/"..name
+      if fs.exists(dst) then fs.delete(dst) end
+      if fs.exists(src) then fs.copy(src,dst) end
+    end
+    fs.delete("/processoros/.pending_boot")
+    assert(store.save("update_progress",{phase="failed",n=0,total=1,detail="Startup rollback: "..tostring(err)}))
+  end)
+  if restored then return dofile("/processoros/startup.lua") end
+  err=tostring(err).."; rollback failed: "..tostring(why)
+end
 if not ok then
   printError("ProcessorOS startup failed: "..tostring(err))
   pcall(function()

@@ -103,6 +103,8 @@ local notice=""
 local updateProgress=store.load("update_progress",nil)
 local remoteUpdates={}
 local updateView=false
+local updateReady=false
+local updateCheckpoint=false
 local function publishProgress(phase,n,total,detail)
   updateProgress={phase=phase,n=n,total=total,detail=detail,at=clock()}
   assert(store.save("update_progress",updateProgress))
@@ -110,7 +112,10 @@ local function publishProgress(phase,n,total,detail)
     pcall(rednet.send,config.master_id,{kind="update_progress",group=config.network_group or "factory",progress=updateProgress},control.protocol)
   end
 end
-if updateProgress and updateProgress.phase=="installed" then publishProgress("complete",1,1) end
+if updateProgress and updateProgress.phase=="installed" then
+  publishProgress("complete",1,1)
+  if fs.exists("/processoros/.pending_boot") then fs.delete("/processoros/.pending_boot") end
+end
 local function localPacket() local p=net.packet(config,states,engine.status); p.updateProgress=updateProgress; return p end
 local function lines()
   local result={}
@@ -291,7 +296,11 @@ local function work()
         else drainSince=nil end
       else exitReason=requestedExit; return end
     end
-    if updateRequested then exitReason="update"; return end
+    if updateCheckpoint then
+      assert(store.save("state",states)); assert(store.save("analytics",analytics.data))
+      updateReady=true
+      while updateCheckpoint do sleep(0.05) end
+    end
     sleep(math.max(0.05,config.poll_seconds or 0.1))
   end
 end
@@ -428,6 +437,7 @@ local function terminalInput()
       end
     elseif a=="shell" then
       if wizard.localSession then print("Cancel registration on Master first")
+      elseif updateRequested then print("Update active")
       else config.enabled=false; assert(store.save("config",config)); requestedExit="shell"; while true do sleep(0.1) end end
     elseif a=="feed" then toggle(); print(config.enabled and "Feed ON" or "Feed PAUSED"); if notice~="" then print(notice) end
     elseif a=="update" then requestUpdate(); print(notice)
@@ -476,7 +486,25 @@ local function receive()
     end
   end
 end
-parallel.waitForAny(work,display,monitorInput,terminalInput,broadcast,receive)
+local function updateWorker()
+  while true do
+    if updateRequested then
+      local function checkpoint()
+        updateCheckpoint=true
+        while not updateReady do sleep(0.05) end
+        publishProgress("checkpoint",1,1)
+      end
+      local ok,result=pcall(function()
+        return assert(loadfile("/processoros/update.lua"))({soft=true,progress=publishProgress,checkpoint=checkpoint})
+      end)
+      if ok and result==true then exitReason="reload"; return end
+      updateCheckpoint=false; updateReady=false; updateRequested=false
+      publishProgress("failed",0,1,tostring(result)); notice="Update failed; previous services resumed"
+    end
+    sleep(0.1)
+  end
+end
+parallel.waitForAny(work,display,monitorInput,terminalInput,broadcast,receive,updateWorker)
 if exitReason=="shell" then print("ProcessorOS stopped. Run reboot to restart."); return end
 if exitReason=="setup" then
   terminal.setBackgroundColor(colors.black); terminal.setTextColor(colors.white); terminal.clear(); terminal.setCursorPos(1,1)

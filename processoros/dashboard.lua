@@ -178,7 +178,7 @@ function M.typed(r,session,ui)
   paint(1,h-2,w,ui.mode=="pick" and " BACK TO PORTS" or " SAVE CONFIGURATION",colors.green,{kind=ui.mode=="pick" and "back" or "save"})
   return hits
 end
-function M.analytics(r,groups,ui,now)
+function M.analytics(r,groups,ui,now,resources)
   local w,h=r.getSize(); local hits={}
   local function line(x,y,n,s,fg,bg,action)
     if y<1 or y>h or n<1 or x>w then return end
@@ -194,6 +194,15 @@ function M.analytics(r,groups,ui,now)
   local half=math.floor(w/2)
   line(1,3,half," WINDOW "..(ui.window/60).." min",colors.white,colors.blue,{kind="analytics_window"})
   line(half+1,3,w-half," GRAPH "..ui.metric:upper(),colors.white,colors.blue,{kind="analytics_metric"})
+  line(1,h-2,w,ui.resources and " < GROUPS" or " RESOURCES >",colors.white,colors.blue,{kind="analytics_resources"})
+  if ui.resources then
+    local cap=math.max(1,h-7); local pages=math.max(1,math.ceil(#(resources or {})/cap)); ui.page=math.min(ui.page,pages)
+    for i=1,cap do local v=(resources or {})[(ui.page-1)*cap+i]; if v then line(1,3+i,w,string.format(" %s %s : %d %s",v.kind=="fluid" and "F" or "I",v.name,v.count,v.kind=="fluid" and "mB" or "items")) end end
+    line(1,h-1,half," < "..ui.page.."/"..pages,colors.white,colors.gray,{kind="analytics_page",delta=-1})
+    line(half+1,h-1,w-half," NEXT >",colors.white,colors.gray,{kind="analytics_page",delta=1})
+    line(1,h,w," < BACK",colors.white,colors.gray,{kind="analytics_back"})
+    return hits
+  end
   local cap=math.max(1,math.floor((h-7)/5)); local pages=math.max(1,math.ceil(#groups/cap)); ui.page=math.min(ui.page,pages)
   for i=1,cap do
     local g=groups[(ui.page-1)*cap+i]
@@ -217,7 +226,7 @@ function M.analytics(r,groups,ui,now)
       line(1,y+3,w," "..graph,colors.lime)
     end
   end
-  line(1,h-2,w," Sampled state; graph 1-9 = relative production",colors.lightGray)
+
   line(1,h-1,half," < "..ui.page.."/"..pages,colors.white,colors.gray,{kind="analytics_page",delta=-1})
   line(half+1,h-1,w-half," NEXT >",colors.white,colors.gray,{kind="analytics_page",delta=1})
   line(1,h,w," < BACK",colors.white,colors.gray,{kind="analytics_back"})

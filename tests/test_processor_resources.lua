@@ -25,6 +25,7 @@ e.tick(); assert(e.status.old=="WAITING FLUID" and not depot.items[1])
 src.amount=500; e.tick(); assert(dst.amount==250 and depot.items[1].name=="bottle" and src.amount==250)
 dst.amount=0; depot.items[1].name="water_bottle"; e.tick()
 assert(out.items[1].name=="water_bottle" and states.old.completed==1)
+assert(states.old.metrics.item.water_bottle==1)
 assert(core.extraEmpty(m,function(n) return inv[n] end))
 print("typed resource tests passed")
 

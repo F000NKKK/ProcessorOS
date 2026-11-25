@@ -191,7 +191,7 @@ local function draw()
   end
   if config.role=="master" and h>=16 and w>=35 then
     if analyticsView then
-      hits=dashboard.analytics(renderer,analytics.groups(nodes,clock(),analyticsView.window),analyticsView,clock()); renderer.flush(); return
+      hits=dashboard.analytics(renderer,analytics.groups(nodes,clock(),analyticsView.window),analyticsView,clock(),analytics.resources(nodes)); renderer.flush(); return
     end
     if detail then
       local n=nodes[detail.id]; local machine
@@ -390,6 +390,7 @@ local function monitorInput()
                 purgeView=true
               else confirmPurge=target; notice="Cancel AE2 jobs first. Tap PURGE again to confirm." end
             elseif action.kind=="analytics" then analyticsView={page=1,window=60,metric="items"}; detail=nil
+            elseif action.kind=="analytics_resources" and analyticsView then analyticsView.resources=not analyticsView.resources; analyticsView.page=1
             elseif action.kind=="analytics_back" then analyticsView=nil
             elseif action.kind=="analytics_page" and analyticsView then analyticsView.page=math.max(1,analyticsView.page+action.delta)
             elseif action.kind=="analytics_window" and analyticsView then analyticsView.window=analyticsView.window==60 and 300 or (analyticsView.window==300 and 3600 or 60)

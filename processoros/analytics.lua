@@ -73,6 +73,22 @@ function M.new(saved)
       availability=total>0 and math.max(0,observed-(s.seconds.fault or 0))/total or nil,
       seconds=s.seconds,points=points,kind=online and l.kind or "offline",items=s.items or 0,fluid=s.fluid or 0,coverage=dt}
   end
+  function self.resources(nodes)
+    local map={}
+    for _,node in pairs(nodes) do for _,m in ipairs(node.machines) do
+      for _,kind in ipairs({"item","fluid"}) do
+        local metrics=m.metrics and m.metrics[kind]
+        if type(metrics)=="table" then for name,count in pairs(metrics) do
+          if type(name)=="string" and type(count)=="number" and count>=0 then
+            local k=kind.."|"..name; local x=map[k] or {kind=kind,name=name,count=0}; map[k]=x; x.count=x.count+count
+          end
+        end end
+      end
+    end end
+    local rows={} for _,v in pairs(map) do rows[#rows+1]=v end
+    table.sort(rows,function(a,b) if a.kind~=b.kind then return a.kind<b.kind end; if a.count~=b.count then return a.count>b.count end; return a.name<b.name end)
+    return rows
+  end
   function self.groups(nodes,now,window)
     local map={}
     for id,node in pairs(nodes) do

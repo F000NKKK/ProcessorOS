@@ -263,7 +263,18 @@ function M.new(config,states,io,save,clock)
     q.beforeDest=observed(b,q.kind,q.identity,q.destSlot)
     st.pending=q; persist()
   end
+  local function record(st,kind,identity,n)
+    if n<=0 then return end
+    st.metrics=st.metrics or {item={},fluid={}}
+    local map=st.metrics[kind]
+    local name=kind=="item" and identity:match("^[^|]+") or identity
+    if name then map[name]=(map[name] or 0)+n end
+  end
   local function finish(st,q,n)
+    if q.action=="extra_output" then
+      record(st,q.kind,q.identity,n)
+      if q.kind=="item" then st.completed=(st.completed or 0)+n else st.fluidCompleted=(st.fluidCompleted or 0)+n end
+    end
     if q.action=="load" then
       if n==0 and q.same then st.baseline=nil; st.started=nil; st.phase="idle" end
       if n>0 then
@@ -272,6 +283,7 @@ function M.new(config,states,io,save,clock)
         if not q.same and q.track then st.active=true; st.started=clock(); st.phase="processing" end
       end
     elseif q.action=="unload" then
+      record(st,q.kind,q.identity,n)
       st.completed=(st.completed or 0)+n
       if n==q.originalCount and (q.same or st.active) then st.baseline=nil; st.active=nil; st.phase="idle"; st.started=nil; st.staging=nil; st.loadedInputs=nil; st.topupAt=nil end
     end
@@ -304,13 +316,13 @@ function M.new(config,states,io,save,clock)
     if c.kind=="item" then
       for _,v in ipairs(slots(src)) do
         if v.item.name==c.resource then
-          local n=transfer(st,{name=c.source},{name=c.destination},v.slot,math.min(limit,v.item.count))
+          local n=transfer(st,{name=c.source},{name=c.destination},v.slot,math.min(limit,v.item.count),c.direction=="out" and {action="extra_output"} or nil)
           persist(); return n
         end
       end
       return 0
     end
-    local q={kind="fluid",source=c.source,destination=c.destination,identity=c.resource,count=limit}
+    local q={kind="fluid",source=c.source,destination=c.destination,identity=c.resource,count=limit,action=c.direction=="out" and "extra_output" or nil}
     journal(st,q)
     local n=src.pushFluid(c.destination,limit,c.resource)
     assert(type(n)=="number" and n>=0 and n<=limit,"Invalid fluid transfer result")
@@ -395,7 +407,7 @@ function M.new(config,states,io,save,clock)
         local amount,other=resourceAmount(dst,c)
         if other then return false,"WRONG "..c.kind:upper() end
         if amount>c.amount and c.kind~="fluid" then return false,"EXCESS "..c.kind:upper() end
-        if c.kind~="fluid" then need(c.kind,c.source,c.resource,c.amount-amount) end
+        need(c.kind,c.source,c.resource,c.amount-amount)
       end
     end
     for _,n in pairs(needs) do
@@ -489,6 +501,7 @@ function M.new(config,states,io,save,clock)
             local n=move(entry,count)
             if not n then return end
             job.produced=(job.produced or 0)+n
+            record(st,entry.kind,entry.identity,n)
             if r.kind=="item" then st.completed=st.completed+n else st.fluidCompleted=(st.fluidCompleted or 0)+n end
             st.pending=nil; job.quiet=nil; persist()
             if n<count then blocked=true end
@@ -595,6 +608,7 @@ function M.new(config,states,io,save,clock)
     if moved~=added or moved<0 or moved>q.limit then return false end
     if e.output then
       st.batch.produced=(st.batch.produced or 0)+moved
+      record(st,e.kind,e.identity,moved)
       if e.kind=="item" then st.completed=st.completed+moved else st.fluidCompleted=(st.fluidCompleted or 0)+moved end
       st.batch.quiet=nil
     else

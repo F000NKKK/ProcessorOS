@@ -73,6 +73,7 @@ local function terminalMenu()
     print("F - Start / pause feed")
     print("D - Hardware diagnostics")
     print("P - Purge / return all resources to ME")
+    print("DOSE - Set exact mB per item (AUTO fluid ID)")
     print("PURGE RETURN - Set ME fluid return")
     print("PURGE STATUS - Show evacuation state")
   end
@@ -261,6 +262,7 @@ local function sendControl(id,action,enabled,number)
   if not ok or not sent then pending[token]=nil; if action=="purge" then remotePurges[id]={phase="failed",blocked={"Command not sent"}} end; notice="Command not sent" else notice="Command sent; awaiting ACK" end
 end
 local missingPorts={}
+local doseRequest
 local function work()
   while true do
     while #queue>0 do
@@ -303,6 +305,11 @@ local function work()
     if config.role=="slave" and not purging() and not wizard.localSession and not requestedExit and not updateRequested then
       local removed=core.pruneDetached(config,peripheral.isPresent,missingPorts,clock(),10)
       if #removed>0 then assert(store.save("config",config)); notice="Removed offline unused ports: "..table.concat(removed,", ") end
+    end
+    if doseRequest then
+      local q=doseRequest; doseRequest=nil
+      local ok,msg=core.setDose(config,q.source,q.amount)
+      if ok then assert(store.save("config",config)); print("Dose saved: "..q.source.." = "..tostring(q.amount or "AUTO").." mB"); notice="Dose saved" else print(msg); notice=msg end
     end
     if purging() then purge.tick()
     elseif wizard.localSession then
@@ -460,7 +467,28 @@ local function terminalInput()
     if requestedExit=="setup" then
       if a=="cancel" or a=="x" then requestedExit=nil; drainSince=nil; releaseHold(); print("Setup cancelled; feed preference restored") else print("Draining; X + Enter cancels") end
     else
-    if a=="purge status" or (a=="purge" and purging()) then
+    if (a=="dose" or a:match("^dose%s+")) and config.role=="slave" then
+      if updateRequested or wizard.localSession or requestedExit or purging() then print("Maintenance active") else
+        local ports,seen={},{}
+        for _,machine in ipairs(config.machines) do if machine.mode~="batch" then
+          for _,c in ipairs(machine.connections or {}) do
+            if c.kind=="fluid" and c.direction=="in" and not c.resource and not seen[c.source] then seen[c.source]=true; ports[#ports+1]=c.source end
+          end
+        end end
+        table.sort(ports)
+        if #ports==0 then print("No AUTO SINGLE fluid input") else
+          for i,name in ipairs(ports) do print(i..") "..name.." = "..tostring(config.fluid_doses and config.fluid_doses[name] or "AUTO")) end
+          local source=ports[1]
+          if #ports>1 then write("Input number> "); source=ports[tonumber(read())] end
+          if source then
+            local value=a:match("^dose%s+(.+)$")
+            if not value then write("Exact mB per item (AUTO clears)> "); value=read():lower() end
+            local amount=tonumber(value)
+            if amount or value=="auto" then doseRequest={source=source,amount=amount} else print("Invalid dose") end
+          end
+        end
+      end
+    elseif a=="purge status" or (a=="purge" and purging()) then
       local j=purge.job; if j then print(j.phase..": "..j.items.." items / "..j.fluid.." mB"); for _,e in ipairs(j.blocked or {}) do print(e) end else print("No local purge") end
     elseif a=="purge return" and config.role=="slave" then
       if updateRequested or wizard.localSession or requestedExit then print("Maintenance active") else

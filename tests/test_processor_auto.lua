@@ -64,11 +64,34 @@ inv.depot_1.items={}; inv.spout_1.amount=0; source.amount=495
 source.pushFluid=original
 local s={}; local fix=core.new(single,s,function(n) return inv[n] end,function() return true end,function() return now end)
 fix.tick(); assert(inv.spout_1.amount==495 and s["1"].baseline)
-source.amount=5; now=3; fix.tick(); assert(inv.spout_1.amount==500 and source.amount==0)
+assert(core.setDose(single,"tank_0",500)); source.amount=5; now=3; fix.tick(); assert(inv.spout_1.amount==500 and source.amount==0)
 inv.depot_1.items[1].name="minecraft:potion"; inv.spout_1.amount=0
 fix.tick(); assert(s["1"].completed==1 and not s["1"].baseline)
 -- An already timed-out legacy operation recovers after a compatible tail arrives.
-raw.items={[1]={name="minecraft:glass_bottle",count=1}}; source.amount=495
+assert(core.setDose(single,"tank_0",nil)); raw.items={[1]={name="minecraft:glass_bottle",count=1}}; source.amount=495
 fix.tick(); s["1"].phase="fault"; s["1"].error="Processing timeout"; s["1"].loadedInputs=nil
-source.amount=5; now=400; fix.tick(); assert(inv.spout_1.amount==500 and s["1"].phase=="processing")
+assert(core.setDose(single,"tank_0",500)); source.amount=5; now=400; fix.tick(); assert(inv.spout_1.amount==500 and s["1"].phase=="processing")
 print("fluid tail recovery tests passed")
+
+-- Exact dose refuses primary load at 498 and 499 even if the peripheral
+-- reports the whole requested transfer. It relies on the observed tank.
+inv.depot_1.items={}; inv.spout_1.amount=0; source.amount=500
+raw.items={[1]={name="minecraft:glass_bottle",count=1}}
+local exactStates={}; local exact=core.new(single,exactStates,function(n) return inv[n] end,function() return true end,function() return now end)
+source.pushFluid=function(dest,n,resource)
+  local moved=original(dest,math.max(1,n-2),resource)
+  return n
+end
+exact.tick(); assert(inv.spout_1.amount==498 and not inv.depot_1.items[1])
+exact.tick(); assert(inv.spout_1.amount==499 and not inv.depot_1.items[1])
+exact.tick(); assert(inv.spout_1.amount==500 and inv.depot_1.items[1])
+assert(exactStates["1"].loadedInputs[1].verified)
+-- Once verified, a consumed dose is not blindly refilled before animation finishes.
+source.amount=500; inv.spout_1.amount=0; now=now+5; exact.tick()
+assert(source.amount==500 and inv.spout_1.amount==0)
+-- AUTO does not silently round down a fractional share.
+assert(core.setDose(single,"tank_0",nil)); inv.depot_1.items={}; inv.spout_1.amount=0
+source.amount=999; raw.items={[1]={name="minecraft:glass_bottle",count=2}}
+local auto=core.new(single,{},function(n) return inv[n] end,function() return true end,function() return now end)
+auto.tick(); assert(not inv.depot_1.items[1] and source.amount==999)
+print("verified exact fluid dose tests passed")

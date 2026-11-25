@@ -246,6 +246,18 @@ function M.validate(config)
     if e then error(n..": "..u.label.." "..u.role.." overlaps "..e.label.." "..e.role,0) end
   end
 end
+-- A dose sets the amount independently of fluid identity. It is scoped to a
+-- configured raw fluid input, shared by all SINGLE machines using that input.
+function M.setDose(cfg,source,amount)
+  if amount~=nil and (type(amount)~="number" or amount%1~=0 or amount<1 or amount>1000000) then return false,"Invalid dose (1..1000000 mB)" end
+  local found=false
+  for _,m in ipairs(cfg.machines or {}) do if m.mode~="batch" then
+    for _,v in ipairs(m.connections or {}) do if v.kind=="fluid" and v.direction=="in" and v.source==source and not v.resource then found=true end end
+  end end
+  if not found then return false,"No AUTO SINGLE fluid input: "..tostring(source) end
+  cfg.fluid_doses=cfg.fluid_doses or {}; cfg.fluid_doses[source]=amount
+  return true
+end
 function M.new(config,states,io,save,clock)
   M.validate(config)
   local self={states=states,status={},cursor=0}
@@ -352,6 +364,9 @@ function M.new(config,states,io,save,clock)
     local r={} for k,v in pairs(c) do r[k]=v end
     r.resource=name; r.amount=amount; return r
   end
+  local function dose(c)
+    return c.amount or (c.kind=="fluid" and c.direction=="in" and config.fluid_doses and config.fluid_doses[c.source])
+  end
   local function resolve(m,primary,v,load)
     local result={}
     local count=0
@@ -382,9 +397,14 @@ function M.new(config,states,io,save,clock)
             if bn[1] and bn[1]~=name then return nil,"WRONG "..c.kind:upper() end
             local amount=1
             if c.kind=="fluid" then
-              local share=math.floor((a[name] or 0)/math.max(1,count))
-              if share<1 and not b[name] then return nil,"WAITING FLUID" end
-              amount=math.max(share,b[name] or 0)
+              local exact=dose(c)
+              if exact then amount=exact
+              else
+                local total=(a[name] or 0)+(b[name] or 0)
+                if total%math.max(1,count)~=0 then return nil,"WAITING COMPLETE FLUID DOSE" end
+                amount=total/math.max(1,count)
+                if amount<1 then return nil,"WAITING FLUID" end
+              end
             end
             result[#result+1]=resolved(c,name,amount)
           else
@@ -446,7 +466,7 @@ function M.new(config,states,io,save,clock)
           if available<=0 or (c.kind~="fluid" and available<c.amount-amount) then self.status[m.id]="WAITING "..c.kind:upper(); return false end
           resourceMove(st,c,math.min(available,c.amount-amount))
           amount=resourceAmount(dst,c)
-          if amount<c.amount then self.status[m.id]="STAGING "..c.kind:upper(); return false end
+          if amount<c.amount then self.status[m.id]="STAGING "..c.kind:upper().." "..amount.."/"..c.amount; return false end
         end
       end
     end
@@ -640,6 +660,18 @@ function M.new(config,states,io,save,clock)
     finish(st,q,moved)
     return true
   end
+  local function verifyDose(m,inputs)
+    for _,c in ipairs(inputs or {}) do
+      if c.kind=="fluid" and c.direction=="in" then
+        local dst=io(c.destination)
+        if not dst or not dst.tanks then self.status[m.id]="OFFLINE FLUID"; return false end
+        local n,other=resourceAmount(dst,c)
+        if other or n<c.amount then self.status[m.id]="DOSE "..n.."/"..c.amount.." mB"; return false end
+        c.verified=true
+      end
+    end
+    return true
+  end
   local function topup(m,st,p,inv)
     if not st.baseline or not p.machine_input or not inv.machine_input then return false end
     local original=false
@@ -654,9 +686,11 @@ function M.new(config,states,io,save,clock)
         if src and dst and src.tanks and dst.tanks and src.pushFluid then
           local a,an=contents(src,"fluid")
           local b,bn=contents(dst,"fluid")
-          local target,name=c.amount,c.resource
+          local target,name=dose(c),c.resource
+          local exact=target~=nil
+          local saved
           for _,r in ipairs(st.loadedInputs or {}) do
-            if r.kind=="fluid" and r.source==c.source and r.destination==c.destination then name=name or r.resource; target=target or r.amount; break end
+            if r.kind=="fluid" and r.source==c.source and r.destination==c.destination then saved=r; name=name or r.resource; target=target or r.amount; break end
           end
           -- Legacy operations can infer the fluid only from a nonempty working tank.
           name=name or (#bn==1 and bn[1] or nil)
@@ -677,12 +711,20 @@ function M.new(config,states,io,save,clock)
             end
             if p.input and inv.input then for _,v in ipairs(slots(inv.input)) do if allowed(p.input,v.slot) then reserved=true end end end
             local amount=b[name] or 0
-            local limit=target and math.max(0,target-amount) or 0
-            -- Never take an entire future batch. Only an unallocated tail can supplement AUTO.
-            if not reserved and not c.resource then limit=math.max(limit,math.min(a[name],100)) end
+            -- Never re-dose an already verified operation: Create may have
+            -- consumed the liquid before the original item changes.
+            local already=saved and saved.verified and saved.amount==target
+            local limit=exact and not already and amount>0 and math.max(0,target-amount) or 0
             if not reserved and limit>0 then
               local n=resourceMove(st,resolved(c,name,limit),math.min(limit,a[name]))
               if n>0 then
+                local measured,other=resourceAmount(dst,resolved(c,name,target))
+                if not other and measured>=target then
+                  if not saved then
+                    st.loadedInputs=st.loadedInputs or {}; saved=resolved(c,name,target); st.loadedInputs[#st.loadedInputs+1]=saved
+                  end
+                  saved.amount=target; saved.verified=true
+                end
                 st.started=clock(); st.topupAt=clock(); st.phase="processing"; st.error=nil; persist()
                 self.status[m.id]="TOPUP "..n.." mB"; changed=true
               end
@@ -737,7 +779,7 @@ function M.new(config,states,io,save,clock)
         end
       end
       if not ready and ((same and st.baseline) or st.active) then
-        if clock()-(st.started or clock())>=2 and topup(m,st,p,inv) then return end
+        if topup(m,st,p,inv) then return end
         self.status[m.id]="PROCESSING"
         if clock()-(st.started or clock())>(m.timeout or 300) then st.phase="fault"; st.error="Processing timeout"; persist() end
       end
@@ -776,6 +818,16 @@ function M.new(config,states,io,save,clock)
           local inputs,why
           if st.staging and st.staging.inputs then inputs=st.staging.inputs else inputs,why=resolve(m,p.input,v,true) end
           if not inputs then self.status[m.id]=why; return end
+          -- A corrected dose also applies to a staged operation that has not
+          -- received its primary item yet. The original fluid identity is kept.
+          for _,v in ipairs(inputs) do if v.kind=="fluid" then
+            for _,route in ipairs(m.connections or {}) do
+              if route.kind=="fluid" and route.direction=="in" and route.source==v.source and route.destination==v.destination then
+                local target=dose(route)
+                if target and target~=v.amount then v.amount=target; v.verified=nil; persist() end
+              end
+            end
+          end end
           local ok; ok,why=preflight(m,p.input,v,inputs)
           if not ok then self.status[m.id]=why; return end
           if not st.staging then st.staging={key=key(v.item),started=clock(),inputs=inputs}; persist()
@@ -784,6 +836,7 @@ function M.new(config,states,io,save,clock)
           -- A transfer from the same raw inventory can invalidate the original slot.
           local actual=inv.input.list()[v.slot]
           if not actual or key(actual)~=st.staging.key then self.status[m.id]="WAITING PRIMARY"; return end
+          if not verifyDose(m,inputs) then return end
         end
         if same then st.baseline=key(v.item); st.started=clock(); st.cycleStarted=st.started; st.phase="processing" end
         local n=transfer(st,p.input,p.machine_input,v.slot,math.min(v.item.count,m.batch_size or 1),{action="load",same=same,track=#(m.connections or {})>0})

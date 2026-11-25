@@ -270,22 +270,31 @@ function M.new(config,states,io,save,clock)
     local name=kind=="item" and identity:match("^[^|]+") or identity
     if name then map[name]=(map[name] or 0)+n end
   end
+  local function cycle(st,started)
+    if type(started)~="number" then return end
+    local duration=clock()-started
+    if duration<0 then return end
+    st.cycles=st.cycles or {count=0,seconds=0,max=0}
+    local a=st.cycles
+    a.count=a.count+1; a.seconds=a.seconds+duration; a.max=math.max(a.max,duration)
+    a.last=duration
+  end
   local function finish(st,q,n)
     if q.action=="extra_output" then
       record(st,q.kind,q.identity,n)
       if q.kind=="item" then st.completed=(st.completed or 0)+n else st.fluidCompleted=(st.fluidCompleted or 0)+n end
     end
     if q.action=="load" then
-      if n==0 and q.same then st.baseline=nil; st.started=nil; st.phase="idle" end
+      if n==0 and q.same then st.baseline=nil; st.started=nil; st.cycleStarted=nil; st.phase="idle" end
       if n>0 then
         if st.staging then st.loadedInputs=st.staging.inputs end
         st.staging=nil
-        if not q.same and q.track then st.active=true; st.started=clock(); st.phase="processing" end
+        if not q.same and q.track then st.active=true; st.started=clock(); st.cycleStarted=st.started; st.phase="processing" end
       end
     elseif q.action=="unload" then
       record(st,q.kind,q.identity,n)
       st.completed=(st.completed or 0)+n
-      if n==q.originalCount and (q.same or st.active) then st.baseline=nil; st.active=nil; st.phase="idle"; st.started=nil; st.staging=nil; st.loadedInputs=nil; st.topupAt=nil end
+      if n==q.originalCount and (q.same or st.active) then cycle(st,st.cycleStarted or st.started); st.cycleStarted=nil; st.baseline=nil; st.active=nil; st.phase="idle"; st.started=nil; st.staging=nil; st.loadedInputs=nil; st.topupAt=nil end
     end
     st.pending=nil; persist()
   end
@@ -521,7 +530,7 @@ function M.new(config,states,io,save,clock)
       if blocked then self.status[m.id]="OUTPUT BLOCKED"; return end
       if empty and (job.produced or 0)>0 then
         job.quiet=job.quiet or clock()
-        if clock()-job.quiet>=2 then st.batch=nil; st.active=nil; st.phase="idle"; st.started=nil; persist() end
+        if clock()-job.quiet>=2 then cycle(st,job.started); st.batch=nil; st.active=nil; st.phase="idle"; st.started=nil; persist() end
       else job.quiet=nil end
       if st.batch then
         self.status[m.id]="PROCESSING BATCH"
@@ -776,7 +785,7 @@ function M.new(config,states,io,save,clock)
           local actual=inv.input.list()[v.slot]
           if not actual or key(actual)~=st.staging.key then self.status[m.id]="WAITING PRIMARY"; return end
         end
-        if same then st.baseline=key(v.item); st.started=clock(); st.phase="processing" end
+        if same then st.baseline=key(v.item); st.started=clock(); st.cycleStarted=st.started; st.phase="processing" end
         local n=transfer(st,p.input,p.machine_input,v.slot,math.min(v.item.count,m.batch_size or 1),{action="load",same=same,track=#(m.connections or {})>0})
         self.status[m.id]=n>0 and "LOADING" or "INPUT BLOCKED"
         return

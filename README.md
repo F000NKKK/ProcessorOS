@@ -106,3 +106,5 @@ PURGE: cancel AE2 crafting jobs and stop external inputs first. Master PURGE SLA
 Slave CLI: F (FEED) toggles production; P (PURGE) requests evacuation with YES confirmation. Full command names remain supported.
 
 Analytics RESOURCES lists persistent per-product counts since this feature was installed, recorded at confirmed output transfers (including recovered transfers). Counts survive purge and controller restart; old production cannot be attributed retroactively. The Master aggregates currently known Slave counters.
+
+Analytics RANKING sorts machines by measured items/min or mB/min. Cycle durations are recorded for tracked in-place/auxiliary operations and completed batch jobs, excluding untracked separate-buffer machines (N/A); they represent elapsed controller operation time, not motor time. Group hints identify observed output blocking, input waiting, faults, offline nodes, and sustained high utilization in the selected window. They are heuristics, not proof of a global bottleneck. Cycle counters persist through purge.

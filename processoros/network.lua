@@ -35,7 +35,7 @@ function M.packet(config,states,status)
   for _,m in ipairs(config.machines or {}) do
     local s=states[m.id] or {}
     rows[#rows+1]={id=m.number and string.format("Machine %03d",m.number) or m.id,phase=s.phase or "idle",status=status[m.id] or "IDLE",
-      completed=s.completed or 0,fluidCompleted=s.fluidCompleted or 0,metrics=s.metrics,error=s.error,enabled=m.enabled~=false,number=m.number,ports=m.ports,connections=m.connections}
+      completed=s.completed or 0,fluidCompleted=s.fluidCompleted or 0,metrics=s.metrics,cycles=s.cycles,error=s.error,enabled=m.enabled~=false,number=m.number,ports=m.ports,connections=m.connections}
   end
   return {schema=1,group=config.network_group or "factory",name=config.name or "ProcessorOS",
     role=config.role or "slave",slaveNumber=config.slave_number,enabled=config.enabled==true and not config.feed_hold,feedRequested=config.enabled==true,hold=config.feed_hold,machines=rows}
@@ -47,7 +47,7 @@ function M.accept(nodes,sender,msg,group,now)
   for _,r in ipairs(msg.machines) do
     if type(r)~="table" or type(r.id)~="string" or type(r.status)~="string" or type(r.phase)~="string" then return false end
     rows[#rows+1]={id=r.id:sub(1,40),phase=r.phase:sub(1,30),status=r.status:sub(1,100),
-      connections=type(r.connections)=="table" and r.connections or {},number=type(r.number)=="number" and r.number or nil,enabled=r.enabled~=false,ports=type(r.ports)=="table" and r.ports or {},completed=tonumber(r.completed) or 0,fluidCompleted=tonumber(r.fluidCompleted) or 0,metrics=type(r.metrics)=="table" and r.metrics or nil,error=type(r.error)=="string" and r.error:sub(1,100) or nil}
+      connections=type(r.connections)=="table" and r.connections or {},number=type(r.number)=="number" and r.number or nil,enabled=r.enabled~=false,ports=type(r.ports)=="table" and r.ports or {},completed=tonumber(r.completed) or 0,fluidCompleted=tonumber(r.fluidCompleted) or 0,metrics=type(r.metrics)=="table" and r.metrics or nil,cycles=type(r.cycles)=="table" and r.cycles or nil,error=type(r.error)=="string" and r.error:sub(1,100) or nil}
   end
   nodes[sender]={purge=type(msg.purge)=="table" and msg.purge or nil,updateProgress=type(msg.updateProgress)=="table" and msg.updateProgress or nil,groupName=msg.name:sub(1,60),name=(type(msg.slaveNumber)=="number" and string.format("Slave %03d / ",msg.slaveNumber) or "")..msg.name:sub(1,60),machines=rows,enabled=msg.enabled==true,feedRequested=msg.feedRequested,hold=type(msg.hold)=="string" and msg.hold or nil,seen=now}
   return true

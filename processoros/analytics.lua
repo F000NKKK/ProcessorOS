@@ -5,6 +5,7 @@ local function num(v) return type(v)=="number" and v>=0 and v<1e15 and v or 0 en
 function M.classify(row,enabled)
   local status=tostring(row.status or "")
   if status:find("^OFFLINE") then return "offline" end
+  if status=="PURGING" or status=="BATCH PAUSED" or status=="STAGED / PAUSED" then return "paused" end
   if row.phase=="fault" then return "fault" end
   if status:find("BLOCKED",1,true) then return "blocked" end
   if status:find("^WAITING") or status:find("^WRONG") or status:find("^MIXED") or status:find("^EXCESS") then return "waiting" end
@@ -37,6 +38,7 @@ function M.new(saved)
             local p=s.points[#s.points]
             if not p or p.at~=bucket then p={at=bucket,items=0,fluid=0,dt=0}; s.points[#s.points+1]=p end
             p.items=p.items+di; p.fluid=p.fluid+df; p.dt=p.dt+dt
+            p.seconds=p.seconds or {}; p.seconds[l.kind]=(p.seconds[l.kind] or 0)+dt
           else s.resets=s.resets+1 end
         else s.seconds.offline=(s.seconds.offline or 0)+dt end
       end
@@ -61,9 +63,12 @@ function M.new(saved)
       local n=s.seconds[kind] or 0; total=total+n
       if kind~="offline" then observed=observed+n end
     end
-    local points={}
+    local points,recent={},{}
     for _,p in ipairs(s.points) do
-      if now-p.at<=(window or 60) then items=items+p.items; fluid=fluid+p.fluid; dt=dt+p.dt end
+      if now-p.at<=(window or 60) then
+        items=items+p.items; fluid=fluid+p.fluid; dt=dt+p.dt
+        for k,v in pairs(p.seconds or {}) do recent[k]=(recent[k] or 0)+v end
+      end
       if now-p.at<=3600 then points[#points+1]=p end
     end
     local offline=not online and l and math.max(0,now-l.at) or 0
@@ -71,7 +76,17 @@ function M.new(saved)
     return {rate=online and dt>0 and items*60/dt or 0,fluidRate=online and dt>0 and fluid*60/dt or 0,
       utilization=observed>0 and (s.seconds.busy or 0)/observed or nil,
       availability=total>0 and math.max(0,observed-(s.seconds.fault or 0))/total or nil,
-      seconds=s.seconds,points=points,kind=online and l.kind or "offline",items=s.items or 0,fluid=s.fluid or 0,coverage=dt}
+      seconds=s.seconds,recent=recent,points=points,kind=online and l.kind or "offline",items=s.items or 0,fluid=s.fluid or 0,coverage=dt,cycles=row.cycles}
+  end
+  function self.ranking(nodes,now,window,metric)
+    local rows={}
+    for id,node in pairs(nodes) do for _,m in ipairs(node.machines) do
+      local a=self.machine(id,m,now,window)
+      local n,d=num(m.cycles and m.cycles.count),num(m.cycles and m.cycles.seconds)
+      rows[#rows+1]={name=m.id,group=node.groupName or node.name,rate=metric=="fluid" and a.fluidRate or a.rate,kind=a.kind,coverage=a.coverage,cycle=n>0 and d/n or nil,cycles=n}
+    end end
+    table.sort(rows,function(a,b) if a.rate~=b.rate then return a.rate>b.rate end; if a.group~=b.group then return a.group<b.group end; return a.name<b.name end)
+    return rows
   end
   function self.resources(nodes)
     local map={}
@@ -93,7 +108,7 @@ function M.new(saved)
     local map={}
     for id,node in pairs(nodes) do
       local name=node.groupName or node.name
-      local g=map[name] or {name=name,count=0,online=0,rate=0,fluidRate=0,seconds={},points={},items=0,fluid=0,counts={}}
+      local g=map[name] or {name=name,count=0,online=0,rate=0,fluidRate=0,seconds={},points={},items=0,fluid=0,counts={},recent={},coverage=0}
       map[name]=g
       for _,m in ipairs(node.machines) do
         local a=self.machine(id,m,now,window)
@@ -102,6 +117,9 @@ function M.new(saved)
         g.items=g.items+a.items; g.fluid=g.fluid+a.fluid
         g.counts[a.kind]=(g.counts[a.kind] or 0)+1
         for k,v in pairs(a.seconds) do g.seconds[k]=(g.seconds[k] or 0)+v end
+        if a.kind=="offline" then g.offlineNow=(g.offlineNow or 0)+1 end
+        for k,v in pairs(a.recent) do g.recent[k]=(g.recent[k] or 0)+v end
+        g.coverage=g.coverage+a.coverage
         for _,p in ipairs(a.points) do
           local q=g.points[p.at] or {at=p.at,items=0,fluid=0}; g.points[p.at]=q
           q.items=q.items+p.items; q.fluid=q.fluid+p.fluid
@@ -114,6 +132,18 @@ function M.new(saved)
       for k,v in pairs(g.seconds) do total=total+v; if k~="offline" then observed=observed+v end end
       g.utilization=observed>0 and (g.seconds.busy or 0)/observed or nil
       g.availability=total>0 and math.max(0,observed-(g.seconds.fault or 0))/total or nil
+      local measured=0; for _,v in pairs(g.recent) do measured=measured+v end
+      local function ratio(k) return measured>0 and (g.recent[k] or 0)/measured or 0 end
+      -- Evidence-based hints, not a dependency graph or a theoretical capacity calculation.
+      if (g.counts.fault or 0)>0 then g.hint="FAULT: inspect machines"
+      elseif (g.counts.offline or 0)>0 then g.hint="OFFLINE: check connection"
+      elseif measured<20 then g.hint="COLLECTING DATA"
+      elseif ratio("blocked")>=0.15 then g.hint="OUTPUT: inspect return capacity"
+      elseif ratio("waiting")>=0.25 then g.hint="INPUT: inspect resource supply"
+      elseif ratio("busy")>=0.85 then g.hint="HIGH LOAD: candidate for expansion"
+      elseif ratio("paused")>=0.5 then g.hint="PAUSED: check feed settings"
+      else g.hint="NO DOMINANT LIMIT" end
+      g.recentBusy=measured>0 and ratio("busy") or nil
       local p={} for _,v in pairs(g.points) do p[#p+1]=v end table.sort(p,function(a,b) return a.at<b.at end); g.points=p
       list[#list+1]=g
     end

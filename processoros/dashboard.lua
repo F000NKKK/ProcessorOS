@@ -178,7 +178,7 @@ function M.typed(r,session,ui)
   paint(1,h-2,w,ui.mode=="pick" and " BACK TO PORTS" or " SAVE CONFIGURATION",colors.green,{kind=ui.mode=="pick" and "back" or "save"})
   return hits
 end
-function M.analytics(r,groups,ui,now,resources)
+function M.analytics(r,groups,ui,now,resources,ranking)
   local w,h=r.getSize(); local hits={}
   local function line(x,y,n,s,fg,bg,action)
     if y<1 or y>h or n<1 or x>w then return end
@@ -194,7 +194,22 @@ function M.analytics(r,groups,ui,now,resources)
   local half=math.floor(w/2)
   line(1,3,half," WINDOW "..(ui.window/60).." min",colors.white,colors.blue,{kind="analytics_window"})
   line(half+1,3,w-half," GRAPH "..ui.metric:upper(),colors.white,colors.blue,{kind="analytics_metric"})
-  line(1,h-2,w,ui.resources and " < GROUPS" or " RESOURCES >",colors.white,colors.blue,{kind="analytics_resources"})
+  line(1,h-2,half,ui.resources and " < GROUPS" or " RESOURCES >",colors.white,colors.blue,{kind="analytics_resources"})
+  line(half+1,h-2,w-half,ui.ranking and " < GROUPS" or " RANKING >",colors.white,colors.blue,{kind="analytics_ranking"})
+  if ui.ranking then
+    local cap=math.max(1,math.floor((h-7)/2)); local pages=math.max(1,math.ceil(#(ranking or {})/cap)); ui.page=math.min(ui.page,pages)
+    for i=1,cap do
+      local v=(ranking or {})[(ui.page-1)*cap+i]
+      if v then
+        line(1,4+(i-1)*2,w,v.name.." / "..v.group,colors.cyan)
+        line(1,5+(i-1)*2,w,string.format(" %.1f %s/min | cycle %s | %s",v.rate,ui.metric=="fluid" and "mB" or "items",v.cycle and string.format("%.1fs",v.cycle) or "N/A",v.kind))
+      end
+    end
+    line(1,h-1,half," < "..ui.page.."/"..pages,colors.white,colors.gray,{kind="analytics_page",delta=-1})
+    line(half+1,h-1,w-half," NEXT >",colors.white,colors.gray,{kind="analytics_page",delta=1})
+    line(1,h,w," < BACK",colors.white,colors.gray,{kind="analytics_back"})
+    return hits
+  end
   if ui.resources then
     local cap=math.max(1,h-7); local pages=math.max(1,math.ceil(#(resources or {})/cap)); ui.page=math.min(ui.page,pages)
     for i=1,cap do local v=(resources or {})[(ui.page-1)*cap+i]; if v then line(1,3+i,w,string.format(" %s %s : %d %s",v.kind=="fluid" and "F" or "I",v.name,v.count,v.kind=="fluid" and "mB" or "items")) end end
@@ -210,7 +225,7 @@ function M.analytics(r,groups,ui,now,resources)
       local y=4+(i-1)*5
       local function pct(v) return v and string.format("%.0f%%",100*v) or "N/A" end
       line(1,y,w," "..g.name.." | "..g.online.."/"..g.count.." online",colors.cyan,colors.gray)
-      line(1,y+1,w,string.format(" %.1f items/m | %.1f mB/m | Busy %s",g.rate,g.fluidRate,pct(g.utilization)))
+      line(1,y+1,w,string.format(" %.1f items/m | %.1f mB/m | Busy %s",g.rate,g.fluidRate,pct(g.recentBusy)))
       line(1,y+2,w,string.format(" Avail %s | Fault %d | Block %d | Wait %d",pct(g.availability),g.counts.fault or 0,g.counts.blocked or 0,g.counts.waiting or 0),colors.lightGray)
       local bins,max={},0
       local n=math.max(1,w-2)
@@ -224,6 +239,7 @@ function M.analytics(r,groups,ui,now,resources)
       local graph=""
       for j=1,n do local v=bins[j]; graph=graph..(not v and " " or (v==0 and "." or ("123456789"):sub(math.max(1,math.ceil(v/max*9)),math.max(1,math.ceil(v/max*9))))) end
       line(1,y+3,w," "..graph,colors.lime)
+      line(1,y+4,w," "..(g.hint or ""),colors.orange)
     end
   end
 

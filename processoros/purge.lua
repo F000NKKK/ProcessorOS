@@ -87,7 +87,7 @@ function M.new(cfg,states,io,save,clock,job)
       if clock()-j.quiet>=3 then
         for _,m in ipairs(cfg.machines or {}) do
           local s=states[m.id] or {}
-          states[m.id]={phase="idle",completed=s.completed or 0,fluidCompleted=s.fluidCompleted or 0,metrics=s.metrics}
+          states[m.id]={phase="idle",completed=s.completed or 0,fluidCompleted=s.fluidCompleted or 0,metrics=s.metrics,cycles=s.cycles}
         end
         assert(save("state",states)); j.phase="complete"; j.finished=clock()
       end

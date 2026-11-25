@@ -123,7 +123,7 @@ if updateProgress and updateProgress.phase=="installed" then
   publishProgress("complete",1,1)
   if fs.exists("/processoros/.pending_boot") then fs.delete("/processoros/.pending_boot") end
 end
-local function localPacket() local p=net.packet(config,states,engine.status); p.updateProgress=updateProgress; if purge.job then p.purge={phase=purge.job.phase,items=purge.job.items,fluid=purge.job.fluid,blocked=purge.job.blocked,remaining=purge.job.remaining} end; return p end
+local function localPacket() local p=net.packet(config,states,engine.status); p.updateProgress=updateProgress; if purging() then for _,m in ipairs(p.machines) do m.status="PURGING" end end; if purge.job then p.purge={phase=purge.job.phase,items=purge.job.items,fluid=purge.job.fluid,blocked=purge.job.blocked,remaining=purge.job.remaining} end; return p end
 local function lines()
   local result={}
   local function add(t,c) result[#result+1]={t,c or colors.white} end
@@ -191,7 +191,7 @@ local function draw()
   end
   if config.role=="master" and h>=16 and w>=35 then
     if analyticsView then
-      hits=dashboard.analytics(renderer,analytics.groups(nodes,clock(),analyticsView.window),analyticsView,clock(),analytics.resources(nodes)); renderer.flush(); return
+      hits=dashboard.analytics(renderer,analytics.groups(nodes,clock(),analyticsView.window),analyticsView,clock(),analytics.resources(nodes),analytics.ranking(nodes,clock(),analyticsView.window,analyticsView.metric)); renderer.flush(); return
     end
     if detail then
       local n=nodes[detail.id]; local machine
@@ -390,7 +390,8 @@ local function monitorInput()
                 purgeView=true
               else confirmPurge=target; notice="Cancel AE2 jobs first. Tap PURGE again to confirm." end
             elseif action.kind=="analytics" then analyticsView={page=1,window=60,metric="items"}; detail=nil
-            elseif action.kind=="analytics_resources" and analyticsView then analyticsView.resources=not analyticsView.resources; analyticsView.page=1
+            elseif action.kind=="analytics_resources" and analyticsView then analyticsView.resources=not analyticsView.resources; analyticsView.ranking=false; analyticsView.page=1
+            elseif action.kind=="analytics_ranking" and analyticsView then analyticsView.ranking=not analyticsView.ranking; analyticsView.resources=false; analyticsView.page=1
             elseif action.kind=="analytics_back" then analyticsView=nil
             elseif action.kind=="analytics_page" and analyticsView then analyticsView.page=math.max(1,analyticsView.page+action.delta)
             elseif action.kind=="analytics_window" and analyticsView then analyticsView.window=analyticsView.window==60 and 300 or (analyticsView.window==300 and 3600 or 60)

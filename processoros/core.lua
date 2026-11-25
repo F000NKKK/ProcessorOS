@@ -365,7 +365,7 @@ function M.new(config,states,io,save,clock,recipeLookup)
     r.resource=name; r.amount=amount; return r
   end
   local function dose(c)
-    return c.amount or (c.kind=="fluid" and c.direction=="in" and config.fluid_doses and config.fluid_doses[c.source])
+    return c.amount or (not recipeLookup and c.kind=="fluid" and c.direction=="in" and config.fluid_doses and config.fluid_doses[c.source])
   end
   local function resolve(m,primary,v,load)
     local result={}
@@ -400,9 +400,10 @@ function M.new(config,states,io,save,clock,recipeLookup)
               local exact=dose(c)
               if recipeLookup then
                 local target,err=recipeLookup(v.item,name)
-                if not target then return nil,err or "FILLING RECIPE NOT FOUND" end
-                amount=target
-              elseif exact then amount=exact
+                if target then exact=target
+                elseif err~="RECIPE CATALOG MISSING" then return nil,err or "FILLING RECIPE NOT FOUND" end
+              end
+              if exact then amount=exact
               else
                 local total=(a[name] or 0)+(b[name] or 0)
                 if total%math.max(1,count)~=0 then return nil,"WAITING COMPLETE FLUID DOSE" end
@@ -837,9 +838,8 @@ function M.new(config,states,io,save,clock,recipeLookup)
                 local target=dose(route)
                 if recipeLookup and not route.resource then
                   local found,err=recipeLookup(primaryItem,v.resource)
-                  -- Use the current primary item, not the fluid connection.
                   target=found
-                  if not target then self.status[m.id]=err or "FILLING RECIPE NOT FOUND"; return end
+                  if not target and err~="RECIPE CATALOG MISSING" then self.status[m.id]=err or "FILLING RECIPE NOT FOUND"; return end
                 end
                 if target and target~=v.amount then v.amount=target; v.verified=nil; persist() end
               end

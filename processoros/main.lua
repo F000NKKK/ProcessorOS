@@ -51,14 +51,17 @@ end
 local recipeCatalog=recipeModule.new()
 local function loadRecipes()
   local path="/processoros/data/recipes.json"
-  if not fs.exists(path) then return false,"Recipe catalog missing: "..path end
+  if not fs.exists(path) then return false,"Recipe catalog missing; using measured AE2 batch allocation" end
   local h=assert(fs.open(path,"r")); local raw=h.readAll(); h.close()
   local value=textutils.unserializeJSON(raw)
   local ok,err=pcall(recipeCatalog.replace,value)
   if not ok then return false,tostring(err) end
   return true,"Loaded "..#value.filling.." filling recipes"
 end
-pcall(loadRecipes)
+local recipeOK,recipeLoaded,recipeMessage=pcall(loadRecipes)
+if config.role=="slave" and not (recipeOK and recipeLoaded) then
+  print(recipeOK and recipeMessage or ("Recipe catalog load error: "..tostring(recipeLoaded)))
+end
 local engine=core.new(config,states,io,function(s) return store.save("state",s) end,clock,recipeCatalog.lookup)
 local purge=purgeModule.new(config,states,peripheral.wrap,store.save,clock,store.load("purge",nil))
 local function purging() return purge.job and purge.job.phase=="running" end
@@ -476,7 +479,7 @@ local function terminalInput()
     if a=="recipes" and config.role=="slave" then
       local ok,msg=loadRecipes(); print(msg)
     elseif (a=="dose" or a:match("^dose%s+")) and config.role=="slave" then
-      print("Manual AUTO dose is retired. Import recipes.json and run RECIPES.")
+      print("Manual AUTO dose is retired. Recipes or measured AE2 batches are automatic.")
     elseif a=="purge status" or (a=="purge" and purging()) then
       local j=purge.job; if j then print(j.phase..": "..j.items.." items / "..j.fluid.." mB"); for _,e in ipairs(j.blocked or {}) do print(e) end else print("No local purge") end
     elseif a=="purge return" and config.role=="slave" then

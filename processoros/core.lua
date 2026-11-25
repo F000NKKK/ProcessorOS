@@ -267,12 +267,13 @@ function M.new(config,states,io,save,clock)
     if q.action=="load" then
       if n==0 and q.same then st.baseline=nil; st.started=nil; st.phase="idle" end
       if n>0 then
+        if st.staging then st.loadedInputs=st.staging.inputs end
         st.staging=nil
         if not q.same and q.track then st.active=true; st.started=clock(); st.phase="processing" end
       end
     elseif q.action=="unload" then
       st.completed=(st.completed or 0)+n
-      if n==q.originalCount and (q.same or st.active) then st.baseline=nil; st.active=nil; st.phase="idle"; st.started=nil; st.staging=nil end
+      if n==q.originalCount and (q.same or st.active) then st.baseline=nil; st.active=nil; st.phase="idle"; st.started=nil; st.staging=nil; st.loadedInputs=nil; st.topupAt=nil end
     end
     st.pending=nil; persist()
   end
@@ -355,12 +356,12 @@ function M.new(config,states,io,save,clock)
           if load then
             local b,bn=contents(dst,c.kind)
             if #an>1 or #bn>1 then return nil,"MIXED "..c.kind:upper() end
-            local name=an[1]
+            local name=an[1] or (c.kind=="fluid" and bn[1] or nil)
             if not name then return nil,"WAITING "..c.kind:upper() end
             if bn[1] and bn[1]~=name then return nil,"WRONG "..c.kind:upper() end
             local amount=1
             if c.kind=="fluid" then
-              local share=math.floor(a[name]/math.max(1,count))
+              local share=math.floor((a[name] or 0)/math.max(1,count))
               if share<1 and not b[name] then return nil,"WAITING FLUID" end
               amount=math.max(share,b[name] or 0)
             end
@@ -393,8 +394,8 @@ function M.new(config,states,io,save,clock)
       if c.direction=="in" then
         local amount,other=resourceAmount(dst,c)
         if other then return false,"WRONG "..c.kind:upper() end
-        if amount>c.amount then return false,"EXCESS "..c.kind:upper() end
-        need(c.kind,c.source,c.resource,c.amount-amount)
+        if amount>c.amount and c.kind~="fluid" then return false,"EXCESS "..c.kind:upper() end
+        if c.kind~="fluid" then need(c.kind,c.source,c.resource,c.amount-amount) end
       end
     end
     for _,n in pairs(needs) do
@@ -421,8 +422,8 @@ function M.new(config,states,io,save,clock)
         if other then self.status[m.id]="WRONG "..c.kind:upper(); return false end
         if amount<c.amount then
           local available=resourceAmount(src,c)
-          if available<c.amount-amount then self.status[m.id]="WAITING "..c.kind:upper(); return false end
-          resourceMove(st,c,c.amount-amount)
+          if available<=0 or (c.kind~="fluid" and available<c.amount-amount) then self.status[m.id]="WAITING "..c.kind:upper(); return false end
+          resourceMove(st,c,math.min(available,c.amount-amount))
           amount=resourceAmount(dst,c)
           if amount<c.amount then self.status[m.id]="STAGING "..c.kind:upper(); return false end
         end
@@ -616,15 +617,79 @@ function M.new(config,states,io,save,clock)
     finish(st,q,moved)
     return true
   end
+  local function topup(m,st,p,inv)
+    if not st.baseline or not p.machine_input or not inv.machine_input then return false end
+    local original=false
+    for _,v in ipairs(slots(inv.machine_input)) do
+      if allowed(p.machine_input,v.slot) and key(v.item)==st.baseline then original=true; break end
+    end
+    if not original then return false end
+    local changed=false
+    for _,c in ipairs(m.connections or {}) do
+      if c.kind=="fluid" and c.direction=="in" then
+        local src,dst=io(c.source),io(c.destination)
+        if src and dst and src.tanks and dst.tanks and src.pushFluid then
+          local a,an=contents(src,"fluid")
+          local b,bn=contents(dst,"fluid")
+          local target,name=c.amount,c.resource
+          for _,r in ipairs(st.loadedInputs or {}) do
+            if r.kind=="fluid" and r.source==c.source and r.destination==c.destination then name=name or r.resource; target=target or r.amount; break end
+          end
+          -- Legacy operations can infer the fluid only from a nonempty working tank.
+          name=name or (#bn==1 and bn[1] or nil)
+          if name and #an==1 and an[1]==name and (#bn==0 or (#bn==1 and bn[1]==name)) then
+            local reserved=false
+            for _,other in ipairs(config.machines) do
+              if other.id~=m.id then
+                local os=states[other.id]
+                for _,r in ipairs(other.connections or {}) do
+                  if r.kind=="fluid" and r.direction=="in" and r.source==c.source then
+                    if os and (os.staging or os.batch or os.pending) then reserved=true end
+                    local op=port(other.ports.input)
+                    local oi=op and io(op.name)
+                    if oi then for _,v in ipairs(slots(oi)) do if allowed(op,v.slot) then reserved=true end end end
+                  end
+                end
+              end
+            end
+            if p.input and inv.input then for _,v in ipairs(slots(inv.input)) do if allowed(p.input,v.slot) then reserved=true end end end
+            local amount=b[name] or 0
+            local limit=target and math.max(0,target-amount) or 0
+            -- Never take an entire future batch. Only an unallocated tail can supplement AUTO.
+            if not reserved and not c.resource then limit=math.max(limit,math.min(a[name],100)) end
+            if not reserved and limit>0 then
+              local n=resourceMove(st,resolved(c,name,limit),math.min(limit,a[name]))
+              if n>0 then
+                st.started=clock(); st.topupAt=clock(); st.phase="processing"; st.error=nil; persist()
+                self.status[m.id]="TOPUP "..n.." mB"; changed=true
+              end
+            end
+          end
+        end
+      end
+    end
+    return changed
+  end
   local function step(m,load)
     local st=states[m.id] or {phase="idle",completed=0}
     states[m.id]=st
     if st.pending and load then return end
     if st.pending and not recoverBatch(st) and not recoverSingle(st) then st.phase="fault"; st.error="Uncertain transfer; inspect ports"; self.status[m.id]="FAULT"; return end
-    if st.phase=="fault" then return end
+    local retryTimeout=st.phase=="fault" and st.error=="Processing timeout" and st.baseline~=nil
+    if st.phase=="fault" and not retryTimeout then self.status[m.id]="FAULT"; return end
     local p={} local inv={}
     for _,r in ipairs(roles) do
       p[r]=port(m.ports[r]); if p[r] then inv[r]=io(p[r].name); if not inv[r] then self.status[m.id]="OFFLINE "..r; return end end
+    end
+    if retryTimeout then
+      if load then return end
+      if not topup(m,st,p,inv) then
+        -- Allow a manually completed original item to be unloaded after a timeout.
+        local transformed=false
+        for _,v in ipairs(slots(inv.machine_output)) do if allowed(p.machine_output,v.slot) and key(v.item)~=st.baseline then transformed=true end end
+        if not transformed then self.status[m.id]="FAULT"; return end
+        st.phase="processing"; st.error=nil; persist()
+      end
     end
     if m.mode=="batch" then return batchStep(m,st,p,inv,load) end
     local same=p.machine_input.name==p.machine_output.name and (not p.machine_input.slot or not p.machine_output.slot or p.machine_input.slot==p.machine_output.slot)
@@ -649,6 +714,7 @@ function M.new(config,states,io,save,clock)
         end
       end
       if not ready and ((same and st.baseline) or st.active) then
+        if clock()-(st.started or clock())>=2 and topup(m,st,p,inv) then return end
         self.status[m.id]="PROCESSING"
         if clock()-(st.started or clock())>(m.timeout or 300) then st.phase="fault"; st.error="Processing timeout"; persist() end
       end

@@ -55,3 +55,20 @@ assert(es.states["1"].staging and raw.items[1].count==3)
 assert(es.status["2"]=="WAITING STAGED BATCH" and es.status["3"]=="WAITING STAGED BATCH")
 for i=1,4 do es.tick() end
 assert(not es.states["1"].staging and inv.depot_1.items[1])
+
+-- 495 mB inferred at launch; the missing 5 mB arrives after the item was loaded.
+local single={enabled=true,machines={cfg.machines[1]}}
+local now=0
+raw.items={[1]={name="minecraft:glass_bottle",count=1}}
+inv.depot_1.items={}; inv.spout_1.amount=0; source.amount=495
+source.pushFluid=original
+local s={}; local fix=core.new(single,s,function(n) return inv[n] end,function() return true end,function() return now end)
+fix.tick(); assert(inv.spout_1.amount==495 and s["1"].baseline)
+source.amount=5; now=3; fix.tick(); assert(inv.spout_1.amount==500 and source.amount==0)
+inv.depot_1.items[1].name="minecraft:potion"; inv.spout_1.amount=0
+fix.tick(); assert(s["1"].completed==1 and not s["1"].baseline)
+-- An already timed-out legacy operation recovers after a compatible tail arrives.
+raw.items={[1]={name="minecraft:glass_bottle",count=1}}; source.amount=495
+fix.tick(); s["1"].phase="fault"; s["1"].error="Processing timeout"; s["1"].loadedInputs=nil
+source.amount=5; now=400; fix.tick(); assert(inv.spout_1.amount==500 and s["1"].phase=="processing")
+print("fluid tail recovery tests passed")

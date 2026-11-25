@@ -258,7 +258,7 @@ function M.setDose(cfg,source,amount)
   cfg.fluid_doses=cfg.fluid_doses or {}; cfg.fluid_doses[source]=amount
   return true
 end
-function M.new(config,states,io,save,clock)
+function M.new(config,states,io,save,clock,recipeLookup)
   M.validate(config)
   local self={states=states,status={},cursor=0}
   local function persist() assert(save(states)) end
@@ -398,7 +398,11 @@ function M.new(config,states,io,save,clock)
             local amount=1
             if c.kind=="fluid" then
               local exact=dose(c)
-              if exact then amount=exact
+              if recipeLookup then
+                local target,err=recipeLookup(v.item,name)
+                if not target then return nil,err or "FILLING RECIPE NOT FOUND" end
+                amount=target
+              elseif exact then amount=exact
               else
                 local total=(a[name] or 0)+(b[name] or 0)
                 if total%math.max(1,count)~=0 then return nil,"WAITING COMPLETE FLUID DOSE" end
@@ -688,12 +692,18 @@ function M.new(config,states,io,save,clock)
           local b,bn=contents(dst,"fluid")
           local target,name=dose(c),c.resource
           local exact=target~=nil
+          local originalItem
+          for _,v in ipairs(slots(inv.machine_input)) do if allowed(p.machine_input,v.slot) and key(v.item)==st.baseline then originalItem=v.item; break end end
           local saved
           for _,r in ipairs(st.loadedInputs or {}) do
             if r.kind=="fluid" and r.source==c.source and r.destination==c.destination then saved=r; name=name or r.resource; target=target or r.amount; break end
           end
           -- Legacy operations can infer the fluid only from a nonempty working tank.
           name=name or (#bn==1 and bn[1] or nil)
+          if recipeLookup and not c.resource then
+            target=originalItem and name and recipeLookup(originalItem,name) or nil
+            exact=target~=nil
+          end
           if name and #an==1 and an[1]==name and (#bn==0 or (#bn==1 and bn[1]==name)) then
             local reserved=false
             for _,other in ipairs(config.machines) do
@@ -820,10 +830,17 @@ function M.new(config,states,io,save,clock)
           if not inputs then self.status[m.id]=why; return end
           -- A corrected dose also applies to a staged operation that has not
           -- received its primary item yet. The original fluid identity is kept.
+          local primaryItem=v.item
           for _,v in ipairs(inputs) do if v.kind=="fluid" then
             for _,route in ipairs(m.connections or {}) do
               if route.kind=="fluid" and route.direction=="in" and route.source==v.source and route.destination==v.destination then
                 local target=dose(route)
+                if recipeLookup and not route.resource then
+                  local found,err=recipeLookup(primaryItem,v.resource)
+                  -- Use the current primary item, not the fluid connection.
+                  target=found
+                  if not target then self.status[m.id]=err or "FILLING RECIPE NOT FOUND"; return end
+                end
                 if target and target~=v.amount then v.amount=target; v.verified=nil; persist() end
               end
             end

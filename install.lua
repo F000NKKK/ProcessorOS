@@ -5,7 +5,7 @@ local function progress(phase,n,total,detail) if opts.progress then opts.progres
 local BASE="https://raw.githubusercontent.com/F000NKKK/ProcessorOS/master/"
 local HOME="/processoros"
 local stage=HOME.."/.installing"
-local files={"core.lua","main.lua","setup.lua","config.default.lua","renderer.lua","storage.lua","network.lua","registration.lua","wizard.lua","console.lua","dashboard.lua","control.lua","diagnostic.lua","analytics.lua","purge.lua","update.lua","startup.lua"}
+local files={"core.lua","main.lua","setup.lua","config.default.lua","renderer.lua","storage.lua","network.lua","registration.lua","wizard.lua","console.lua","dashboard.lua","control.lua","diagnostic.lua","analytics.lua","purge.lua","recipes.lua","update.lua","startup.lua"}
 local function write(path,data)
   local f=assert(fs.open(path,"w")); f.write(data); f.close()
 end

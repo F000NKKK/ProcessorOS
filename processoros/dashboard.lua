@@ -50,6 +50,10 @@ function M.draw(r,model)
     button(bw+2,5,bw,selected and selected.hold and " AUTO PAUSED" or (selected and selected.enabled and " PAUSE FEED" or " START FEED"),{kind="feed"},colors.green)
     button(2*bw+3,5,bw," UPDATE SLAVE",{kind="update_slave"},colors.brown)
   end
+  local pw=math.floor(w/3)
+  button(1,6,pw," PURGE SLAVE",{kind="purge_slave"},colors.red)
+  button(pw+1,6,pw," PURGE ALL",{kind="purge_all"},colors.red)
+  button(2*pw+1,6,w-2*pw," PURGE STATUS",{kind="purge_view"},colors.gray)
   local l=M.layout(w,h,#rows)
   local page=math.max(1,math.min(model.page,l.pages))
   for j=1,l.capacity do
@@ -240,6 +244,25 @@ function M.updates(r,list)
   end
   line(h," < BACK",colors.cyan)
   return {{x=1,y=h,w=w,action={kind="update_back"}}}
+end
+function M.purge(r,rows)
+  local w,h=r.getSize()
+  r.setBackgroundColor(colors.black); r.clear()
+  local function line(y,s,c)
+    if y>h or y<1 then return end
+    r.setCursorPos(1,y); r.setTextColor(c or colors.white); r.write(clip(s,w))
+  end
+  line(1," PROCESSOR OS / PURGE",colors.cyan)
+  local y=3
+  for _,v in ipairs(rows) do
+    local p=v.purge or {}
+    line(y,v.name.." / "..tostring(p.phase),p.phase=="complete" and colors.lime or colors.yellow); y=y+1
+    line(y,string.format(" Returned %d items | %d mB",p.items or 0,p.fluid or 0)); y=y+1
+    for _,e in ipairs(p.blocked or {}) do if y<h then line(y,e,colors.red); y=y+1 end end
+    y=y+1; if y>=h then break end
+  end
+  line(h," < BACK",colors.cyan)
+  return {{x=1,y=h,w=w,action={kind="purge_back"}}}
 end
 function M.hit(hits,x,y)
   for _,v in ipairs(hits or {}) do if y==v.y and x>=v.x and x<v.x+v.w then return v.action end end

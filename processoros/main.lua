@@ -7,6 +7,7 @@ local dashboard=dofile("/processoros/dashboard.lua")
 local analyticsModule=dofile("/processoros/analytics.lua")
 local control=dofile("/processoros/control.lua")
 local diagnostic=dofile("/processoros/diagnostic.lua")
+local purgeModule=dofile("/processoros/purge.lua")
 local hits,frame,pending,received={},0,{},{}
 local commandCounter=0
 local confirmUpdate=nil
@@ -47,6 +48,11 @@ local function io(name)
   if p and ((p.list and p.pushItems) or (p.tanks and p.pushFluid)) then return p end
 end
 local engine=core.new(config,states,io,function(s) return store.save("state",s) end,clock)
+local purge=purgeModule.new(config,states,io,store.save,clock,store.load("purge",nil))
+local function purging() return purge.job and purge.job.phase=="running" end
+if purging() then config.enabled=false end
+local purgeView=false
+local confirmPurge=nil
 local monitor,monitorName,screen,renderer
 local rendererModule=dofile("/processoros/renderer.lua")
 local terminal=term.current()
@@ -64,6 +70,7 @@ local function terminalMenu()
     print("G - Rename group")
     print("P - Start / pause feed")
     print("D - Hardware diagnostics")
+    print("PURGE - Return all resources to ME")
   end
   print("U - Update OS")
   print("Q - Exit to shell")
@@ -116,7 +123,7 @@ if updateProgress and updateProgress.phase=="installed" then
   publishProgress("complete",1,1)
   if fs.exists("/processoros/.pending_boot") then fs.delete("/processoros/.pending_boot") end
 end
-local function localPacket() local p=net.packet(config,states,engine.status); p.updateProgress=updateProgress; return p end
+local function localPacket() local p=net.packet(config,states,engine.status); p.updateProgress=updateProgress; if purge.job then p.purge={phase=purge.job.phase,items=purge.job.items,fluid=purge.job.fluid,blocked=purge.job.blocked,remaining=purge.job.remaining} end; return p end
 local function lines()
   local result={}
   local function add(t,c) result[#result+1]={t,c or colors.white} end
@@ -146,6 +153,13 @@ local function draw()
   end
   renderer.setBackgroundColor(colors.black); renderer.clear()
   line(1,"PROCESSOR OS / "..(config.role or "slave"):upper()..(config.slave_number and string.format(" %03d",config.slave_number) or ""),colors.cyan)
+  if purgeView or purging() then
+    local rows={}
+    if config.role=="slave" then rows[1]={name=config.name,purge=purge.job} else
+      for _,id in ipairs(nodeIds(nodes)) do local n=nodes[id]; if n.purge then rows[#rows+1]={name=n.name,purge=n.purge} end end
+    end
+    hits=dashboard.purge(renderer,rows); renderer.flush(); return
+  end
   if updateView or updateRequested then
     local list={{name=config.role=="master" and "Master" or config.name,progress=updateProgress}}
     for id,v in pairs(remoteUpdates) do list[#list+1]={name=nodes[id] and nodes[id].name or ("Slave #"..id),progress=v} end
@@ -246,7 +260,7 @@ local function work()
     while #queue>0 do
       local q=table.remove(queue,1)
       local ok,res=pcall(function()
-        if q[3]~=control.protocol then return wizard.receive(q[1],q[2],q[3]) end
+        if q[3]~=control.protocol then if purging() then return end; return wizard.receive(q[1],q[2],q[3]) end
         local sender,msg=q[1],q[2]
         if config.role=="master" then
           if type(msg)=="table" and msg.kind=="update_progress" and msg.group==(config.network_group or "factory") and nodes[sender] and type(msg.progress)=="table" then
@@ -258,7 +272,7 @@ local function work()
         elseif control.authorized(config,sender,msg) then
           local cached=received[msg.token]
           if not cached then
-            local accepted,message,action=control.apply(config,msg,wizard.localSession~=nil or updateRequested or requestedExit~=nil,store.save,function(machine)
+            local accepted,message,action=control.apply(config,msg,wizard.localSession~=nil or updateRequested or requestedExit~=nil or purging(),store.save,function(machine)
               local s=states[machine.id] or {}; if s.pending or s.baseline or s.active or s.staging or s.phase=="fault" then return false end
               if not core.extraEmpty(machine,io) then return false end
               for _,r in ipairs({"machine_input","machine_output"}) do
@@ -268,6 +282,7 @@ local function work()
               end
               return true
             end)
+            if accepted and action=="purge" then accepted,message=purge.start(); action=nil end
             cached={kind="ack",group=config.network_group or "factory",token=msg.token,ok=accepted,message=message}
             received[msg.token]=cached
             if action=="update" then updateRequested=true; publishProgress("requested",0,1) elseif action=="reload" then requestedExit="reload" end
@@ -279,11 +294,12 @@ local function work()
       if ok and res=="reload" then exitReason="reload"; return end
     end
     for token,p in pairs(pending) do if clock()-p.at>8 then pending[token]=nil; notice="Command ACK timeout" end end
-    if config.role=="slave" and not wizard.localSession and not requestedExit and not updateRequested then
+    if config.role=="slave" and not purging() and not wizard.localSession and not requestedExit and not updateRequested then
       local removed=core.pruneDetached(config,peripheral.isPresent,missingPorts,clock(),10)
       if #removed>0 then assert(store.save("config",config)); notice="Removed offline unused ports: "..table.concat(removed,", ") end
     end
-    if wizard.localSession then
+    if purging() then purge.tick()
+    elseif wizard.localSession then
       if wizard.localSession.phase=="draining" then engine.tick() end
       wizard.tick()
     else engine.tick() end
@@ -317,13 +333,14 @@ local function display()
 end
 local function toggle()
   if wizard.localSession then notice="Registration active"; return end
-  if updateRequested or requestedExit then notice="Maintenance active"; return end
+  if updateRequested or requestedExit or purging() then notice="Maintenance active"; return end
   if config.role=="master" and #config.machines==0 then notice="Master is monitor only"; return end
   if not registered or (config.role=="slave" and not config.master_id) then notice="Register machines with Master first"; return end
   if #config.machines==0 then notice="No registered machines"; return end
   config.enabled=not config.enabled; assert(store.save("config",config))
 end
 local function requestUpdate()
+  if purging() then notice="Purge active"; return end
   if wizard.localSession then notice="Registration active"; return end
   if requestedExit then notice="Configuration pending"; return end
   if updateRequested then return end
@@ -336,7 +353,9 @@ local function monitorInput()
     if e=="monitor_touch" and monitor and screen and a==monitorName and type(b)=="number" and type(c)=="number" then
       local ok,w,h=pcall(screen.getSize)
       if ok and type(w)=="number" and type(h)=="number" then
-        if updateView or updateRequested then
+        if purgeView or purging() then
+          local a=dashboard.hit(hits,b,c); if a and a.kind=="purge_back" then purgeView=false end
+        elseif updateView or updateRequested then
           local a=dashboard.hit(hits,b,c)
           if a and a.kind=="update_back" and not updateRequested then updateView=false end
         elseif wizard.remote then
@@ -361,7 +380,16 @@ local function monitorInput()
           local action=dashboard.hit(hits,b,c)
           if action then
             local ids=nodeIds(nodes); local id=ids[selectedNode]; local n=id and nodes[id]
-            if action.kind=="analytics" then analyticsView={page=1,window=60,metric="items"}; detail=nil
+            if action.kind=="purge_view" then purgeView=true
+            elseif action.kind=="purge_all" or action.kind=="purge_slave" then
+              local target=action.kind=="purge_all" and "all" or id
+              if target and confirmPurge==target then
+                confirmPurge=nil
+                if target=="all" then for nid,v in pairs(nodes) do if clock()-v.seen<=5 then sendControl(nid,"purge") end end
+                elseif n and clock()-n.seen<=5 then sendControl(id,"purge") end
+                purgeView=true
+              else confirmPurge=target; notice="Cancel AE2 jobs first. Tap PURGE again to confirm." end
+            elseif action.kind=="analytics" then analyticsView={page=1,window=60,metric="items"}; detail=nil
             elseif action.kind=="analytics_back" then analyticsView=nil
             elseif action.kind=="analytics_page" and analyticsView then analyticsView.page=math.max(1,analyticsView.page+action.delta)
             elseif action.kind=="analytics_window" and analyticsView then analyticsView.window=analyticsView.window==60 and 300 or (analyticsView.window==300 and 3600 or 60)
@@ -412,8 +440,16 @@ local function terminalInput()
     if requestedExit=="setup" then
       if a=="cancel" or a=="x" then requestedExit=nil; drainSince=nil; releaseHold(); print("Setup cancelled; feed preference restored") else print("Draining; X + Enter cancels") end
     else
-    if a=="setup" and config.role=="slave" then
-      if wizard.localSession or updateRequested then print("Finish registration/update first")
+    if a=="purge" and config.role=="slave" then
+      if wizard.localSession or updateRequested or requestedExit or purging() then print("Maintenance active") else
+        print("Cancel AE2 crafting jobs and stop external input first. Return ALL configured resources? Type YES.")
+        if read()=="YES" then local ok,msg=purge.start(); print(msg); if ok then purgeView=true end end
+      end
+    elseif a=="purge" and config.role=="master" then
+      print("Cancel AE2 jobs first. Purge all online Slaves? Type YES.")
+      if read()=="YES" then for id,n in pairs(nodes) do if clock()-n.seen<=5 then sendControl(id,"purge") end end; purgeView=true end
+    elseif a=="setup" and config.role=="slave" then
+      if wizard.localSession or updateRequested or purging() then print("Finish maintenance first")
       elseif not wizard.masterSeen or clock()-wizard.masterSeen>5 then print("Master offline; setup unavailable")
       else
         config.feed_hold="setup"; drainSince=nil
@@ -428,7 +464,7 @@ local function terminalInput()
       end)
       if not ok then printError(tostring(err)) end
     elseif a=="group" and config.role=="slave" then
-      if wizard.localSession or updateRequested then print("Finish registration/update first")
+      if wizard.localSession or updateRequested or purging() then print("Finish maintenance first")
       else
         write("Group name: "); local name=read()
         if name and name:match("%S") and #name<=60 then

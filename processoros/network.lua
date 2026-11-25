@@ -49,7 +49,7 @@ function M.accept(nodes,sender,msg,group,now)
     rows[#rows+1]={id=r.id:sub(1,40),phase=r.phase:sub(1,30),status=r.status:sub(1,100),
       connections=type(r.connections)=="table" and r.connections or {},number=type(r.number)=="number" and r.number or nil,enabled=r.enabled~=false,ports=type(r.ports)=="table" and r.ports or {},completed=tonumber(r.completed) or 0,fluidCompleted=tonumber(r.fluidCompleted) or 0,error=type(r.error)=="string" and r.error:sub(1,100) or nil}
   end
-  nodes[sender]={updateProgress=type(msg.updateProgress)=="table" and msg.updateProgress or nil,groupName=msg.name:sub(1,60),name=(type(msg.slaveNumber)=="number" and string.format("Slave %03d / ",msg.slaveNumber) or "")..msg.name:sub(1,60),machines=rows,enabled=msg.enabled==true,feedRequested=msg.feedRequested,hold=type(msg.hold)=="string" and msg.hold or nil,seen=now}
+  nodes[sender]={purge=type(msg.purge)=="table" and msg.purge or nil,updateProgress=type(msg.updateProgress)=="table" and msg.updateProgress or nil,groupName=msg.name:sub(1,60),name=(type(msg.slaveNumber)=="number" and string.format("Slave %03d / ",msg.slaveNumber) or "")..msg.name:sub(1,60),machines=rows,enabled=msg.enabled==true,feedRequested=msg.feedRequested,hold=type(msg.hold)=="string" and msg.hold or nil,seen=now}
   return true
 end
 return M

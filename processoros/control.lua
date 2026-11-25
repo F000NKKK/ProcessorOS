@@ -25,6 +25,8 @@ function M.apply(cfg,msg,blocked,save,canRemove)
       table.remove(cfg.machines,index); assert(save("config",cfg)); return true,"Machine removed","reload"
     end
     return false,"Invalid machine command"
+  elseif msg.action=="purge" then
+    return true,"Purge requested","purge"
   elseif msg.action=="update" then
     return true,"Update requested","update"
   end
